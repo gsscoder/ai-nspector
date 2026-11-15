@@ -1,0 +1,104 @@
+# ai-nspector implementation plan
+- Audience: AI coding agents; read `intent.md` (purpose) and `spec.md` (decisions) first
+- Status: steps 0-6 implemented and tested (56 Rust tests, `npm run build`); NOT yet checked in a real window; NOT yet tried with a real LLM; the Linux build is NOT verified (no Linux machine); `parse::debug_structure` removed
+- Build notes (this machine):
+  - Only MSVC 14.16 (VS 2017 Build Tools) is installed: `tree-sitter` is pinned to 0.25 (0.27 needs a newer C compiler)
+  - Use a separate `CARGO_TARGET_DIR` per parallel agent; a shared one gives file-lock errors
+  - Cold `tauri build` takes more than 10 minutes
+- Step 4 inputs: `scan::scan_repo` gives `Project.files`; `parse::analyze_project(repo_root, files)` gives imports and symbols; `llm::complete` and `settings::load_llm_config` give the LLM call
+- Rule: one step at a time; each step ends with a version the user can run; the user approves before the next step
+- Items marked "default" were not asked; change them only with a reason
+## Code layout (default)
+- `src-tauri/src/`: `main.rs`, `scan.rs` (walk + projects), `parse.rs` (tree-sitter), `llm.rs`, `modules.rs` (prompt + validate), `store.rs` (`.ainspector/` + app data)
+- `src/`: `App.tsx`, `api.ts` (Tauri `invoke` wrappers), `types.ts` (hand-written, mirror Rust structs), `components/`
+- Add a file only when one of these grows too large; no layers or traits with a single implementation
+- Type generation (`ts-rs` / `specta`): only if the number of commands grows
+## Step 0: Scaffold
+- Create the Tauri 2 app from the React + TypeScript + Vite template
+- Add Tailwind + shadcn/ui
+- Add plugins: `dialog` (folder picker), `opener` (open file in the user's editor)
+- Done when:
+  - `npm run tauri dev` opens an empty window on Windows
+  - `npm run tauri build` makes a Windows installer/exe
+## Step 1: Open repo and detect projects
+- Rust `scan.rs`:
+  - Walk files with the `ignore` crate (respects `.gitignore`); skip `bin/`, `obj/`, `node_modules/`, `.venv/`, `dist/`, `.ainspector/`
+  - Find manifests: `.csproj`; `pyproject.toml`, `setup.py`, `requirements.txt`; `package.json` (incl. `workspaces`)
+  - Ownership: each source file belongs to the nearest manifest above it
+  - Workspace root with no own source files: not a project
+  - Source files under no manifest: project "(other files)"
+  - Source extensions: `.py`, `.cs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`
+  - Project id: relative path of the manifest (stable, readable)
+- Command: `open_repo(path) -> Repo { root, projects: [{ id, name, language, root, files }] }`
+- App data: recent repos list (JSON), max 10 entries (default)
+- UI:
+  - Start screen: "Open folder" button + recent repos list
+  - Breadcrumb: repo › project (dropdown); main area shows the project name and file count only
+- Tests: fixture repos in `src-tauri/tests/fixtures/`: `python/`, `dotnet/`, `ts-workspaces/`, `mixed/` (nested manifests + loose files)
+- Done when: Rust tests pass; the user opens a real repo and sees the correct projects
+## Step 2: Parse structure
+- Rust `parse.rs` with tree-sitter grammars: Python, C#, TypeScript, TSX, JavaScript
+- Per file, extract:
+  - imports
+  - top-level symbols only: classes, functions, interfaces, enums (name + kind)
+- Resolve imports to files inside the same project; drop external imports
+  - Python: dotted path from the project root and from `src/`; relative imports (`.x`)
+  - TS/JS: relative specifiers; try extensions and `index.*`
+  - C#: build a map namespace → files from `namespace` declarations; `using X` → all files in namespace X
+- Output: `ProjectStructure { files: [{ path, imports: [path], symbols: [{ name, kind }] }] }`
+- No UI in this step
+- Tests: expected import edges and symbols for each fixture repo
+- Done when: tests pass; a debug command prints the structure of a real project
+## Step 3: LLM settings and client
+- Settings screen: base URL, model name, API key
+  - Base URL + model: app data settings JSON
+  - API key: `keyring` crate (Windows Credential Manager, Linux Secret Service)
+- Rust `llm.rs`: one function, POST `{base}/chat/completions` with `reqwest`; request JSON output (`response_format: json_object`)
+- "Test connection" button: sends a tiny prompt, shows OK or the error text
+- Done when: test connection works with one cloud provider (e.g. OpenRouter) and with local Ollama
+## Step 4: Generate and store modules
+- Rust `modules.rs`:
+  - Build the prompt from `ProjectStructure`: file tree + imports + symbols
+  - Size check: tokens ≈ characters ÷ 4; too large → drop symbols; still too large → error with the file count
+  - Response: parse with serde into the module JSON shape in `spec.md`
+  - Validate:
+    - drop file paths that are not in the project
+    - every file has exactly one primary module
+    - files with no module → module "Unassigned" (default)
+    - invalid JSON or schema → retry once, then error
+- Rust `store.rs`:
+  - First write creates `.ainspector/` and `.ainspector/.gitignore` with the content `*`
+  - One file per project: `.ainspector/modules/<project-id-slug>.json`, overwritten on Regenerate
+  - Cache key (default details):
+    - git clean: `git:<HEAD>`
+    - git with uncommitted changes in the project: `git:<HEAD>+fp:<hash of changed files' paths, sizes, modified times>`
+    - no git (or `git` not installed): `fp:<hash of all project files' paths, sizes, modified times>`
+    - get git data from the `git` CLI (`rev-parse HEAD`, `status --porcelain -- <project root>`); no git library
+  - No write permission: return an error
+- Commands:
+  - `load_modules(project_id) -> { modules, outdated }` (no file → `null`)
+  - `generate_modules(project_id)`: async; sends progress events; the user can cancel
+- Tests:
+  - validation with fixed JSON strings (valid, missing files, unknown paths, broken JSON)
+  - cache key: clean, dirty, no git
+  - no real LLM calls in tests
+- Done when: tests pass; generate on a real project writes the file; the file reloads after an app restart
+## Step 5: Full navigation UI
+- Project selected:
+  - no modules yet → "Generate modules" button
+  - modules → cards: name, purpose, file count
+  - "outdated" badge + "Regenerate" button when the cache key differs
+  - progress and Cancel while generating; error text on failure
+- Breadcrumb: repo › project › module; each crumb is a dropdown with its siblings
+- Module selected:
+  - single sidebar: flat file list; file name + relative folder path in grey; primary files first, then secondary files marked (default)
+  - main area: file content with Shiki, read-only; "Open in editor" button
+- Command `read_file(path)`: accept only paths inside the open repo (reject `..` and absolute paths); limit 1 MB, else show "file too large" (default)
+- Done when: the user navigates repo → project → module → file on 3 real repos (Python, .NET, TS)
+## Step 6: Linux build and release
+- Build and run on Linux (VM or native machine): `.AppImage` and `.deb`
+- Check Secret Service: if no keyring is available, show a clear error in Settings
+- Smoke test on Windows and Linux with the same 3 real repos
+- Done when: both builds install and pass the smoke test
+## Not in this plan
+- AI analysis features (over-engineering, AI-slop), macOS, batch split, clustering, SQLite

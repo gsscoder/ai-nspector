@@ -1,0 +1,249 @@
+//! Repo-specific cache in `<repo>/.ainspector/`: one JSON file per project, plus the cache key.
+//! Never stores secrets (API key, base URL).
+
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+
+use crate::scan::Project;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModuleFile {
+    pub path: String,
+    #[serde(default)]
+    pub primary: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Module {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub purpose: String,
+    pub files: Vec<ModuleFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModulesFile {
+    pub project: String,
+    pub cache_key: String,
+    pub model: String,
+    /// RFC 3339, UTC.
+    pub generated_at: String,
+    pub modules: Vec<Module>,
+    /// Computed on load; always stored as `false`.
+    #[serde(default)]
+    pub outdated: bool,
+}
+
+/// FNV-1a: stable across Rust versions (unlike `DefaultHasher`), so a stored key stays valid.
+fn fnv(parts: impl IntoIterator<Item = String>) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for part in parts {
+        for byte in part.bytes().chain([0]) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("{hash:016x}")
+}
+
+fn file_path(repo: &Path, project_id: &str) -> std::path::PathBuf {
+    let slug: String = project_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    // The hash keeps `a/b` and `a_b` apart.
+    let name = format!("{slug}-{}.json", &fnv([project_id.to_string()])[..8]);
+    repo.join(".ainspector").join("modules").join(name)
+}
+
+pub fn save(repo: &Path, project_id: &str, file: &ModulesFile) -> Result<(), String> {
+    let path = file_path(repo, project_id);
+    let dir = path.parent().expect("file_path always has a parent");
+    fs::create_dir_all(dir)
+        .map_err(|e| format!("Cannot write to {}: {e}", dir.display()))?;
+    let ignore = repo.join(".ainspector").join(".gitignore");
+    if !ignore.exists() {
+        fs::write(&ignore, "*\n")
+            .map_err(|e| format!("Cannot write {}: {e}", ignore.display()))?;
+    }
+    let json = serde_json::to_string_pretty(&ModulesFile { outdated: false, ..file.clone() })
+        .map_err(|e| format!("Cannot serialize the modules: {e}"))?;
+    fs::write(&path, json).map_err(|e| format!("Cannot write {}: {e}", path.display()))
+}
+
+pub fn load(repo: &Path, project_id: &str) -> Result<Option<ModulesFile>, String> {
+    let path = file_path(repo, project_id);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("Cannot read {}: {e}", path.display())),
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| format!("{} is damaged ({e}). Regenerate the modules.", path.display()))
+}
+
+/// Runs `git` in `dir`; `None` when git is missing or the command fails.
+fn git(dir: &Path, args: &[&str]) -> Option<String> {
+    let mut command = Command::new("git");
+    command.current_dir(dir).args(args);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // no console window
+    let output = command.output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Hash of path, size and modified time of each file (relative to `base`).
+fn fingerprint<'a>(base: &Path, files: impl Iterator<Item = &'a str>) -> String {
+    let mut parts: Vec<String> = files
+        .map(|rel| {
+            let meta = fs::metadata(base.join(rel)).ok();
+            let size = meta.as_ref().map_or(0, |m| m.len());
+            let mtime = meta
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            format!("{rel}|{size}|{mtime}")
+        })
+        .collect();
+    parts.sort();
+    fnv(parts)
+}
+
+/// `git:<HEAD>`, `git:<HEAD>+fp:<changed files>` or `fp:<all project files>`.
+pub fn cache_key(repo: &Path, project: &Project) -> String {
+    let dir = repo.join(&project.root);
+    if let Some(head) = git(repo, &["rev-parse", "HEAD"]) {
+        let head = head.trim();
+        // Paths relative to the project folder. Staged, unstaged and untracked changes.
+        let changed = git(&dir, &["diff", "--relative", "--name-only", "HEAD", "--", "."])
+            .zip(git(&dir, &["ls-files", "-o", "--exclude-standard", "--", "."]));
+        if let Some((tracked, untracked)) = changed {
+            let all = format!("{tracked}{untracked}");
+            let paths: Vec<&str> = all.lines().filter(|l| !l.is_empty()).collect();
+            return if paths.is_empty() {
+                format!("git:{head}")
+            } else {
+                format!("git:{head}+fp:{}", fingerprint(&dir, paths.into_iter()))
+            };
+        }
+    }
+    format!("fp:{}", fingerprint(repo, project.files.iter().map(String::as_str)))
+}
+
+/// Current UTC time as RFC 3339 (no date crate needed).
+pub fn now_rfc3339() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+    // Civil-from-days (Howard Hinnant).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scan::Language;
+
+    fn project(files: &[&str]) -> Project {
+        Project {
+            id: "package.json".into(),
+            name: "demo".into(),
+            language: Language::Typescript,
+            root: String::new(),
+            files: files.iter().map(|f| f.to_string()).collect(),
+        }
+    }
+
+    fn git_ok(dir: &Path, args: &[&str]) -> bool {
+        git(dir, args).is_some()
+    }
+
+    #[test]
+    fn save_creates_gitignore_and_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = ModulesFile {
+            project: "demo".into(),
+            cache_key: "fp:1".into(),
+            model: "m".into(),
+            generated_at: now_rfc3339(),
+            modules: vec![Module {
+                id: "a".into(),
+                name: "A".into(),
+                purpose: "p".into(),
+                files: vec![ModuleFile { path: "a.ts".into(), primary: true }],
+            }],
+            outdated: true,
+        };
+        assert_eq!(load(dir.path(), "package.json").unwrap(), None);
+        save(dir.path(), "package.json", &file).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join(".ainspector/.gitignore")).unwrap(), "*\n");
+        let loaded = load(dir.path(), "package.json").unwrap().unwrap();
+        assert_eq!(loaded, ModulesFile { outdated: false, ..file });
+    }
+
+    #[test]
+    fn rfc3339_shape() {
+        let now = now_rfc3339();
+        assert_eq!(now.len(), 20);
+        assert!(now.starts_with("20") && now.ends_with('Z'), "{now}");
+    }
+
+    #[test]
+    fn no_git_uses_fingerprint_and_detects_change() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.ts"), "1").unwrap();
+        let p = project(&["a.ts"]);
+        let key = cache_key(dir.path(), &p);
+        assert!(key.starts_with("fp:"), "{key}");
+        assert_eq!(key, cache_key(dir.path(), &p));
+        fs::write(dir.path().join("a.ts"), "12345").unwrap();
+        assert_ne!(key, cache_key(dir.path(), &p));
+    }
+
+    #[test]
+    fn git_clean_then_dirty() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        if !git_ok(d, &["init", "-q"]) {
+            return; // git not installed
+        }
+        fs::write(d.join("a.ts"), "1").unwrap();
+        assert!(git_ok(d, &["add", "."]));
+        assert!(git_ok(
+            d,
+            &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]
+        ));
+        let p = project(&["a.ts"]);
+        let clean = cache_key(d, &p);
+        assert!(clean.starts_with("git:") && !clean.contains("+fp:"), "{clean}");
+        fs::write(d.join("a.ts"), "changed").unwrap();
+        let dirty = cache_key(d, &p);
+        assert!(dirty.starts_with(&clean) && dirty.contains("+fp:"), "{dirty}");
+    }
+}
