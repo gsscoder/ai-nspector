@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cancelGeneration, generateModules, loadModules, onModulesProgress } from "@/api";
+import { projectLabel } from "@/lib/project";
 import type { ModulesFile, Project } from "@/types";
 
 export default function ProjectView({
@@ -18,6 +19,7 @@ export default function ProjectView({
 }) {
   const [stage, setStage] = useState<string | null>(null); // non-null while generating
   const [error, setError] = useState<string | null>(null);
+  const [seconds, setSeconds] = useState(0);
 
   useEffect(() => {
     let stale = false;
@@ -29,6 +31,14 @@ export default function ProjectView({
       stale = true;
     };
   }, [repoRoot, project.id, setData]);
+
+  const generating = stage !== null;
+  useEffect(() => {
+    if (!generating) return;
+    setSeconds(0);
+    const timer = setInterval(() => setSeconds((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [generating]);
 
   async function generate() {
     setError(null);
@@ -44,11 +54,10 @@ export default function ProjectView({
     }
   }
 
-  const generating = stage !== null;
   return (
     <section className="flex flex-col gap-4">
       <div>
-        <h2 className="text-xl font-semibold">{project.name}</h2>
+        <h2 className="text-xl font-semibold">{projectLabel(project)}</h2>
         <p className="text-sm text-muted-foreground">
           {project.files.length} {project.files.length === 1 ? "file" : "files"}
         </p>
@@ -56,7 +65,10 @@ export default function ProjectView({
       <div className="flex items-center gap-2">
         {generating ? (
           <>
-            <span className="text-sm text-muted-foreground">{stage}…</span>
+            <span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            <span className="text-sm text-muted-foreground">
+              {stage}… {seconds}s
+            </span>
             <Button variant="outline" onClick={cancelGeneration}>
               Cancel
             </Button>

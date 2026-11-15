@@ -22,22 +22,24 @@ export default function StartScreen({ onOpen }: { onOpen: (repo: Repo) => void }
   }
 
   return (
-    <div className="mx-auto flex max-w-xl flex-col gap-4">
+    <div className="flex max-w-xl flex-col gap-4">
       <div>
         <Button onClick={() => open(pickFolder)}>Open folder</Button>
       </div>
+      <hr className="border-border" />
       {error && <p className="text-sm text-destructive">{error}</p>}
       {recent.length > 0 && (
         <section>
-          <h2 className="mb-2 text-sm font-medium text-muted-foreground">Recent repos</h2>
-          <ul>
+          <h2 className="mb-3 text-sm font-medium text-muted-foreground">Recent repos</h2>
+          <ul className="flex flex-col gap-2">
             {recent.map((path) => (
               <li key={path}>
                 <button
-                  className="w-full truncate rounded px-2 py-1 text-left text-sm hover:bg-muted"
+                  className="w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted"
                   onClick={() => open(async () => path)}
                 >
-                  {path}
+                  <div className="truncate font-medium">{path.split(/[\\/]/).filter(Boolean).pop() ?? path}</div>
+                  <div className="truncate text-xs text-muted-foreground">{path}</div>
                 </button>
               </li>
             ))}

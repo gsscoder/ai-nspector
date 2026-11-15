@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import ModuleView from "@/components/ModuleView";
 import ProjectView from "@/components/ProjectView";
+import { STACK, projectLabel } from "@/lib/project";
 import type { ModulesFile, Repo } from "@/types";
 
 function Crumb({
@@ -37,7 +38,9 @@ function Crumb({
 }
 
 export default function RepoScreen({ repo, onClose }: { repo: Repo; onClose: () => void }) {
-  const [projectId, setProjectId] = useState(repo.projects[0]?.id);
+  const [projectId, setProjectId] = useState<string | null>(
+    repo.projects.length === 1 ? repo.projects[0].id : null,
+  );
   const [moduleId, setModuleId] = useState<string | null>(null);
   const [data, setData] = useState<ModulesFile | null>(null);
   const project = repo.projects.find((p) => p.id === projectId);
@@ -46,18 +49,25 @@ export default function RepoScreen({ repo, onClose }: { repo: Repo; onClose: () 
   return (
     <div className="flex flex-col gap-4">
       <nav className="flex items-center gap-1 text-sm">
-        <Button variant="ghost" onClick={onClose}>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setProjectId(null);
+            setModuleId(null);
+            setData(null);
+          }}
+        >
           {repo.name}
         </Button>
-        <span className="text-muted-foreground">›</span>
-        {project ? (
+        {project && <span className="text-muted-foreground">›</span>}
+        {project && (
           <Crumb
-            label={project.name}
+            label={projectLabel(project)}
             selected={project.id}
             items={repo.projects.map((p) => ({
               id: p.id,
-              label: p.name,
-              hint: `${p.language} · ${p.files.length} ${p.files.length === 1 ? "file" : "files"}`,
+              label: projectLabel(p),
+              hint: `${STACK[p.language]} · ${p.files.length} ${p.files.length === 1 ? "file" : "files"}`,
             }))}
             onSelect={(id) => {
               setProjectId(id);
@@ -65,8 +75,6 @@ export default function RepoScreen({ repo, onClose }: { repo: Repo; onClose: () 
               setData(null);
             }}
           />
-        ) : (
-          <span className="text-muted-foreground">no projects</span>
         )}
         {module && data && (
           <>
@@ -79,9 +87,32 @@ export default function RepoScreen({ repo, onClose }: { repo: Repo; onClose: () 
             />
           </>
         )}
+        <Button variant="outline" className="ml-auto" onClick={onClose}>
+          Close repo
+        </Button>
       </nav>
-      {!project ? (
+      {repo.projects.length === 0 ? (
         <p className="text-sm text-muted-foreground">No projects found in {repo.root}.</p>
+      ) : !project ? (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-xl font-semibold">Projects</h2>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {repo.projects.map((p) => (
+              <button
+                key={p.id}
+                className="rounded-lg border p-4 text-left hover:bg-muted"
+                onClick={() => setProjectId(p.id)}
+              >
+                <div className="font-medium">{projectLabel(p)}</div>
+                <div className="truncate text-sm text-muted-foreground">{p.root === "" || p.root === "." ? "repo root" : p.root}</div>
+                <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="rounded bg-muted px-2 py-0.5 text-foreground">{STACK[p.language]}</span>
+                  {p.files.length} {p.files.length === 1 ? "file" : "files"}
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
       ) : module ? (
         <ModuleView key={module.id} repoRoot={repo.root} module={module} />
       ) : (

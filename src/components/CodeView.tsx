@@ -25,7 +25,7 @@ export default function CodeView({ repoPath, path }: { repoPath: string; path: s
         const text = await readFile(repoPath, path);
         const { codeToHtml } = await import("shiki"); // lazy: big bundle
         const lang = LANGS[path.split(".").pop() ?? ""] ?? "text";
-        const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const dark = document.documentElement.classList.contains("dark");
         const html = await codeToHtml(text, { lang, theme: dark ? "github-dark" : "github-light" });
         if (!stale) setState({ html });
       } catch (e) {
