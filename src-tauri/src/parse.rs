@@ -54,6 +54,9 @@ pub enum SymbolKind {
     Type,
 }
 
+/// Larger files (generated or minified code) are listed but not parsed; same limit as the code view.
+const MAX_PARSE_BYTES: u64 = 1_000_000;
+
 /// Directory names that never hold project sources; shared by the debug file walk.
 #[cfg(test)]
 const SKIPPED_DIRS: [&str; 8] = [
@@ -70,7 +73,7 @@ const SKIPPED_DIRS: [&str; 8] = [
 /// Parses every file of ONE project and links the files that import each other.
 ///
 /// `files` are repo-relative paths; the language comes from the extension. Files with
-/// another extension, unreadable files and files that are not UTF-8 yield an empty
+/// another extension, unreadable files, files over `MAX_PARSE_BYTES` and files that are not UTF-8 yield an empty
 /// `FileInfo`. Broken syntax yields whatever tree-sitter could still recognise.
 /// The result is sorted by path. `Err` means a bad argument (`repo_root` is not a
 /// directory, a path leaves the repo) or a grammar that cannot be loaded.
@@ -219,8 +222,11 @@ fn parse_file(repo_root: &Path, path: &str) -> Result<ParsedFile, String> {
     })
 }
 
-/// `None` for a missing, unreadable or non-UTF-8 file: such a file has no structure to report.
+/// `None` for a missing, unreadable, oversized or non-UTF-8 file: such a file has no structure to report.
 fn read_utf8(path: &Path) -> Option<String> {
+    if fs::metadata(path).ok()?.len() > MAX_PARSE_BYTES {
+        return None;
+    }
     String::from_utf8(fs::read(path).ok()?).ok()
 }
 

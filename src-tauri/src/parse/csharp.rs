@@ -122,7 +122,12 @@ impl NamespaceIndex {
         let mut files_by_namespace: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (path, unit) in units {
             for namespace in &unit.declared {
-                files_by_namespace.entry(namespace.clone()).or_default().push(path.to_string());
+                match files_by_namespace.get_mut(namespace) {
+                    Some(files) => files.push(path.to_string()),
+                    None => {
+                        files_by_namespace.insert(namespace.clone(), vec![path.to_string()]);
+                    }
+                }
             }
         }
         Self { files_by_namespace }

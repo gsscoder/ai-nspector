@@ -7,6 +7,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::error::AppError;
 use crate::settings::{LlmConfig, load_llm_config};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -21,6 +22,7 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct Choice {
     message: Message,
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -61,19 +63,24 @@ fn describe_network_error(error: &reqwest::Error) -> String {
     text
 }
 
-fn extract_content(body: &str) -> Result<String, String> {
-    let response: ChatResponse = serde_json::from_str(body)
-        .map_err(|e| format!("Unexpected response from the LLM server (no chat completion): {e}"))?;
-    let content = response
+fn extract_content(body: &str) -> Result<String, AppError> {
+    let response: ChatResponse = serde_json::from_str(body).map_err(|e| {
+        AppError::Json("Unexpected response from the LLM server (no chat completion)".into(), e)
+    })?;
+    let choice = response
         .choices
         .into_iter()
         .next()
-        .ok_or("The LLM server returned no choices.")?
-        .message
-        .content
-        .unwrap_or_default();
+        .ok_or_else(|| AppError::Llm("The LLM server returned no choices.".into()))?;
+    // A retry with the same prompt would be cut off at the same place.
+    if choice.finish_reason.as_deref() == Some("length") {
+        return Err(AppError::Llm(
+            "The model output was cut off because it reached the output limit. Use a model with a larger output limit or a smaller project.".into(),
+        ));
+    }
+    let content = choice.message.content.unwrap_or_default();
     if content.trim().is_empty() {
-        return Err("The LLM server returned an empty answer.".into());
+        return Err(AppError::Llm("The LLM server returned an empty answer.".into()));
     }
     Ok(content)
 }
@@ -85,12 +92,12 @@ pub async fn complete(
     system: &str,
     user: &str,
     json_mode: bool,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     let client = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
         .build()
-        .map_err(|e| format!("Cannot create the HTTP client: {e}"))?;
+        .map_err(|e| AppError::Llm(format!("Cannot create the HTTP client: {e}")))?;
 
     let mut request = client
         .post(endpoint_url(&cfg.base_url))
@@ -99,21 +106,24 @@ pub async fn complete(
         request = request.bearer_auth(&cfg.api_key);
     }
 
-    let response = request.send().await.map_err(|e| describe_network_error(&e))?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| AppError::Llm(describe_network_error(&e)))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|e| describe_network_error(&e))?;
+        .map_err(|e| AppError::Llm(describe_network_error(&e)))?;
     if !status.is_success() {
         let excerpt: String = body.trim().chars().take(ERROR_BODY_MAX_CHARS).collect();
-        return Err(format!("The LLM server answered HTTP {status}: {excerpt}"));
+        return Err(AppError::Llm(format!("The LLM server answered HTTP {status}: {excerpt}")));
     }
     extract_content(&body)
 }
 
 #[tauri::command]
-pub async fn test_connection(app: tauri::AppHandle) -> Result<String, String> {
+pub async fn test_connection(app: tauri::AppHandle) -> Result<String, AppError> {
     let cfg = load_llm_config(&app)?;
     let started = Instant::now();
     complete(
@@ -190,7 +200,7 @@ mod tests {
         body: &str,
         api_key: &str,
         json_mode: bool,
-    ) -> (Result<String, String>, String) {
+    ) -> (Result<String, AppError>, String) {
         let (base_url, server) = serve_once(status_line, body).await;
         let result = complete(&config(&base_url, api_key), "be brief", "say hi", json_mode).await;
         (result, server.await.unwrap())
@@ -249,7 +259,7 @@ mod tests {
     async fn non_success_status_reports_code_and_first_300_chars_of_body() {
         let long_body = "x".repeat(500);
         let (result, _) = call("401 Unauthorized", &long_body, "k", false).await;
-        let error = result.unwrap_err();
+        let error = result.unwrap_err().to_string();
         assert!(error.contains("HTTP 401 Unauthorized"), "{error}");
         assert_eq!(error.matches('x').count(), 300);
     }
@@ -257,17 +267,28 @@ mod tests {
     #[tokio::test]
     async fn malformed_json_is_a_shape_error() {
         let (result, _) = call("200 OK", "<html>not json</html>", "k", false).await;
-        assert!(result.unwrap_err().contains("Unexpected response"));
+        assert!(result.unwrap_err().to_string().contains("Unexpected response"));
     }
 
     #[tokio::test]
     async fn empty_choices_and_empty_content_are_errors() {
         let (no_choices, _) = call("200 OK", r#"{"choices":[]}"#, "k", false).await;
-        assert!(no_choices.unwrap_err().contains("no choices"));
+        assert!(no_choices.unwrap_err().to_string().contains("no choices"));
 
         let empty = r#"{"choices":[{"message":{"content":""}}]}"#;
         let (empty_content, _) = call("200 OK", empty, "k", false).await;
-        assert!(empty_content.unwrap_err().contains("empty answer"));
+        assert!(empty_content.unwrap_err().to_string().contains("empty answer"));
+    }
+
+    #[tokio::test]
+    async fn answer_cut_off_by_the_output_limit_is_an_error() {
+        let cut = r#"{"choices":[{"message":{"content":"{\"modules\":[{\"id\""},"finish_reason":"length"}]}"#;
+        let (result, _) = call("200 OK", cut, "k", true).await;
+        assert!(result.unwrap_err().to_string().contains("cut off"));
+
+        let stopped = r#"{"choices":[{"message":{"content":"hello"},"finish_reason":"stop"}]}"#;
+        let (result, _) = call("200 OK", stopped, "k", true).await;
+        assert_eq!(result.unwrap(), "hello");
     }
 
     #[tokio::test]
@@ -275,7 +296,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
         drop(listener);
-        let error = complete(&config(&base_url, ""), "s", "u", false).await.unwrap_err();
+        let error = complete(&config(&base_url, ""), "s", "u", false).await.unwrap_err().to_string();
         assert!(error.starts_with("Network error"), "{error}");
     }
 }

@@ -9,11 +9,13 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+use crate::error::AppError;
+
 const SETTINGS_FILE: &str = "settings.json";
 const KEY_SERVICE: &str = "ai-nspector";
 const KEY_USER: &str = "llm-api-key";
 const NO_STORE_HINT: &str = "No OS credential store available. On Linux, start a Secret Service provider \
-(for example GNOME Keyring or KWallet). The API key is never saved as plain text.";
+(for example GNOME Keyring or KWallet). The API key is never saved as plain text";
 
 /// What the user edits in the Settings screen. Empty strings mean "not set".
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -48,75 +50,83 @@ pub struct LlmConfig {
     pub api_key: String,
 }
 
-fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
     let dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("Cannot find the app data folder: {e}"))?;
+        .map_err(|e| AppError::Platform("Cannot find the app data folder".into(), e.into()))?;
     Ok(dir.join(SETTINGS_FILE))
 }
 
-fn read_settings(path: &Path) -> Result<LlmSettings, String> {
+fn read_settings(path: &Path) -> Result<LlmSettings, AppError> {
     match fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text)
-            .map_err(|e| format!("Settings file {} is not valid: {e}", path.display())),
+            .map_err(|e| AppError::Json(format!("Settings file {} is not valid", path.display()), e)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(LlmSettings::default()),
-        Err(e) => Err(format!("Cannot read {}: {e}", path.display())),
+        Err(e) => Err(AppError::Io(format!("Cannot read {}", path.display()), e)),
     }
 }
 
-fn write_settings(path: &Path, settings: &LlmSettings) -> Result<(), String> {
+fn write_settings(path: &Path, settings: &LlmSettings) -> Result<(), AppError> {
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+        fs::create_dir_all(dir)
+            .map_err(|e| AppError::Io(format!("Cannot create {}", dir.display()), e))?;
     }
     let text = serde_json::to_string_pretty(settings)
-        .map_err(|e| format!("Cannot serialize settings: {e}"))?;
-    fs::write(path, text).map_err(|e| format!("Cannot write {}: {e}", path.display()))
+        .map_err(|e| AppError::Json("Cannot serialize settings".into(), e))?;
+    fs::write(path, text).map_err(|e| AppError::Io(format!("Cannot write {}", path.display()), e))
 }
 
 /// The credential store is installed by `keyring` itself on the first `Entry::new`
 /// (feature `v1`, once per process); here only its failure is turned into a clear error.
-fn key_entry(user: &str) -> Result<keyring::Entry, String> {
+fn key_entry(user: &str) -> Result<keyring::Entry, AppError> {
     if let Err(e) = keyring::Entry::store_status() {
-        return Err(format!("{NO_STORE_HINT} ({e})"));
+        return Err(AppError::Platform(NO_STORE_HINT.into(), e.into()));
     }
-    keyring::Entry::new(KEY_SERVICE, user)
-        .map_err(|e| format!("Cannot open the OS credential store entry: {e}"))
+    keyring::Entry::new(KEY_SERVICE, user).map_err(|e| {
+        AppError::Platform("Cannot open the OS credential store entry".into(), e.into())
+    })
 }
 
 /// `Ok(None)` when no key is stored. Also `Ok(None)` when there is no credential store:
 /// then no key can exist, and local servers need none.
-fn read_api_key(user: &str) -> Result<Option<String>, String> {
+fn read_api_key(user: &str) -> Result<Option<String>, AppError> {
     if keyring::Entry::store_status().is_err() {
         return Ok(None);
     }
     match key_entry(user)?.get_password() {
         Ok(key) => Ok(Some(key)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("Cannot read the API key from the OS credential store: {e}")),
+        Err(e) => Err(AppError::Platform(
+            "Cannot read the API key from the OS credential store".into(),
+            e.into(),
+        )),
     }
 }
 
 /// `None` keeps the stored key, an empty string deletes it, other text replaces it.
-fn apply_api_key_change(user: &str, change: Option<&str>) -> Result<(), String> {
+fn apply_api_key_change(user: &str, change: Option<&str>) -> Result<(), AppError> {
     match change {
         None => Ok(()),
         Some("") => match key_entry(user)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!("Cannot delete the API key from the OS credential store: {e}")),
+            Err(e) => Err(AppError::Platform(
+                "Cannot delete the API key from the OS credential store".into(),
+                e.into(),
+            )),
         },
-        Some(key) => key_entry(user)?
-            .set_password(key)
-            .map_err(|e| format!("Cannot save the API key in the OS credential store: {e}")),
+        Some(key) => key_entry(user)?.set_password(key).map_err(|e| {
+            AppError::Platform("Cannot save the API key in the OS credential store".into(), e.into())
+        }),
     }
 }
 
-fn require_complete(settings: LlmSettings, api_key: String) -> Result<LlmConfig, String> {
+fn require_complete(settings: LlmSettings, api_key: String) -> Result<LlmConfig, AppError> {
     if settings.base_url.is_empty() {
-        return Err("Set the base URL in Settings.".into());
+        return Err(AppError::Invalid("Set the base URL in Settings.".into()));
     }
     if settings.model.is_empty() {
-        return Err("Set the model name in Settings.".into());
+        return Err(AppError::Invalid("Set the model name in Settings.".into()));
     }
     Ok(LlmConfig {
         base_url: settings.base_url,
@@ -125,14 +135,14 @@ fn require_complete(settings: LlmSettings, api_key: String) -> Result<LlmConfig,
     })
 }
 
-pub(crate) fn load_llm_config(app: &AppHandle) -> Result<LlmConfig, String> {
+pub(crate) fn load_llm_config(app: &AppHandle) -> Result<LlmConfig, AppError> {
     let settings = read_settings(&settings_path(app)?)?;
     let api_key = read_api_key(KEY_USER)?.unwrap_or_default();
     require_complete(settings, api_key)
 }
 
 #[tauri::command]
-pub fn get_settings(app: AppHandle) -> Result<SettingsView, String> {
+pub fn get_settings(app: AppHandle) -> Result<SettingsView, AppError> {
     let settings = read_settings(&settings_path(&app)?)?;
     Ok(SettingsView {
         base_url: settings.base_url,
@@ -146,7 +156,7 @@ pub fn save_settings(
     app: AppHandle,
     settings: LlmSettings,
     api_key: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let path = settings_path(&app)?;
     // The key goes first: when the credential store fails, nothing is saved.
     apply_api_key_change(KEY_USER, api_key.as_deref().map(str::trim))?;
@@ -194,16 +204,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(SETTINGS_FILE);
         fs::write(&path, "not json").unwrap();
-        let error = read_settings(&path).unwrap_err();
+        let error = read_settings(&path).unwrap_err().to_string();
         assert!(error.contains(SETTINGS_FILE), "{error}");
     }
 
     #[test]
     fn config_requires_base_url_then_model() {
         let no_url = require_complete(settings("", "m"), String::new()).err().unwrap();
-        assert!(no_url.contains("base URL"));
+        assert!(no_url.to_string().contains("base URL"));
         let no_model = require_complete(settings("http://x", ""), String::new()).err().unwrap();
-        assert!(no_model.contains("model"));
+        assert!(no_model.to_string().contains("model"));
     }
 
     #[test]

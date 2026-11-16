@@ -7,5 +7,8 @@ export const STACK: Record<Language, string> = {
   other: "Other",
 };
 
-// A root project is named after the repo; the suffix tells them apart.
-export const projectLabel = (p: Project) => (p.root === "" ? `${p.name} (root)` : p.name);
+// A root project is labelled by its role; without a clear role (CLI, monolith) it is just "root".
+export const projectLabel = (p: Project) => {
+  if (p.root !== "" || p.language === "other") return p.name;
+  return p.role === "unknown" ? "root" : `${p.role} (root)`;
+};

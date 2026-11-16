@@ -2,12 +2,13 @@
 //! Never stores secrets (API key, base URL).
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::AppError;
 use crate::scan::Project;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -53,47 +54,57 @@ fn fnv(parts: impl IntoIterator<Item = String>) -> String {
     format!("{hash:016x}")
 }
 
-fn file_path(repo: &Path, project_id: &str) -> std::path::PathBuf {
+fn modules_dir(repo: &Path) -> PathBuf {
+    repo.join(".ainspector").join("modules")
+}
+
+fn file_name(project_id: &str) -> String {
     let slug: String = project_id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
     // The hash keeps `a/b` and `a_b` apart.
-    let name = format!("{slug}-{}.json", &fnv([project_id.to_string()])[..8]);
-    repo.join(".ainspector").join("modules").join(name)
+    format!("{slug}-{}.json", &fnv([project_id.to_string()])[..8])
 }
 
-pub fn save(repo: &Path, project_id: &str, file: &ModulesFile) -> Result<(), String> {
-    let path = file_path(repo, project_id);
-    let dir = path.parent().expect("file_path always has a parent");
-    fs::create_dir_all(dir)
-        .map_err(|e| format!("Cannot write to {}: {e}", dir.display()))?;
+/// Stores `file` with `outdated` reset to `false`.
+pub fn save(repo: &Path, project_id: &str, file: &mut ModulesFile) -> Result<(), AppError> {
+    let dir = modules_dir(repo);
+    let path = dir.join(file_name(project_id));
+    fs::create_dir_all(&dir)
+        .map_err(|e| AppError::Io(format!("Cannot write to {}", dir.display()), e))?;
     let ignore = repo.join(".ainspector").join(".gitignore");
     if !ignore.exists() {
         fs::write(&ignore, "*\n")
-            .map_err(|e| format!("Cannot write {}: {e}", ignore.display()))?;
+            .map_err(|e| AppError::Io(format!("Cannot write {}", ignore.display()), e))?;
     }
-    let json = serde_json::to_string_pretty(&ModulesFile { outdated: false, ..file.clone() })
-        .map_err(|e| format!("Cannot serialize the modules: {e}"))?;
-    fs::write(&path, json).map_err(|e| format!("Cannot write {}: {e}", path.display()))
+    file.outdated = false;
+    let json = serde_json::to_string_pretty(file)
+        .map_err(|e| AppError::Json("Cannot serialize the modules".into(), e))?;
+    fs::write(&path, json).map_err(|e| AppError::Io(format!("Cannot write {}", path.display()), e))
 }
 
-pub fn load(repo: &Path, project_id: &str) -> Result<Option<ModulesFile>, String> {
-    let path = file_path(repo, project_id);
+pub fn load(repo: &Path, project_id: &str) -> Result<Option<ModulesFile>, AppError> {
+    let path = modules_dir(repo).join(file_name(project_id));
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("Cannot read {}: {e}", path.display())),
+        Err(e) => return Err(AppError::Io(format!("Cannot read {}", path.display()), e)),
     };
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|e| format!("{} is damaged ({e}). Regenerate the modules.", path.display()))
+    serde_json::from_str(&text).map(Some).map_err(|e| {
+        AppError::Json(format!("{} is damaged, regenerate the modules", path.display()), e)
+    })
 }
 
 /// Runs `git` in `dir`; `None` when git is missing or the command fails.
+/// The repo may be untrusted: its config must not run commands (`core.fsmonitor`) and the
+/// index must not be rewritten.
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
     let mut command = Command::new("git");
-    command.current_dir(dir).args(args);
+    command
+        .current_dir(dir)
+        .args(["--no-optional-locks", "-c", "core.fsmonitor=false"])
+        .args(args);
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // no console window
     let output = command.output().ok()?;
@@ -126,11 +137,12 @@ pub fn cache_key(repo: &Path, project: &Project) -> String {
     if let Some(head) = git(repo, &["rev-parse", "HEAD"]) {
         let head = head.trim();
         // Paths relative to the project folder. Staged, unstaged and untracked changes.
-        let changed = git(&dir, &["diff", "--relative", "--name-only", "HEAD", "--", "."])
-            .zip(git(&dir, &["ls-files", "-o", "--exclude-standard", "--", "."]));
+        // `-z` keeps non-ASCII names unquoted.
+        let changed = git(&dir, &["diff", "-z", "--relative", "--name-only", "HEAD", "--", "."])
+            .zip(git(&dir, &["ls-files", "-z", "-o", "--exclude-standard", "--", "."]));
         if let Some((tracked, untracked)) = changed {
             let all = format!("{tracked}{untracked}");
-            let paths: Vec<&str> = all.lines().filter(|l| !l.is_empty()).collect();
+            let paths: Vec<&str> = all.split('\u{0}').filter(|l| !l.is_empty()).collect();
             return if paths.is_empty() {
                 format!("git:{head}")
             } else {
@@ -175,6 +187,7 @@ mod tests {
             id: "package.json".into(),
             name: "demo".into(),
             language: Language::Typescript,
+            role: crate::scan::Role::Unknown,
             root: String::new(),
             files: files.iter().map(|f| f.to_string()).collect(),
         }
@@ -187,7 +200,7 @@ mod tests {
     #[test]
     fn save_creates_gitignore_and_roundtrips() {
         let dir = tempfile::tempdir().unwrap();
-        let file = ModulesFile {
+        let mut file = ModulesFile {
             project: "demo".into(),
             cache_key: "fp:1".into(),
             model: "m".into(),
@@ -201,10 +214,11 @@ mod tests {
             outdated: true,
         };
         assert_eq!(load(dir.path(), "package.json").unwrap(), None);
-        save(dir.path(), "package.json", &file).unwrap();
+        save(dir.path(), "package.json", &mut file).unwrap();
         assert_eq!(fs::read_to_string(dir.path().join(".ainspector/.gitignore")).unwrap(), "*\n");
         let loaded = load(dir.path(), "package.json").unwrap().unwrap();
-        assert_eq!(loaded, ModulesFile { outdated: false, ..file });
+        assert_eq!(loaded, file);
+        assert!(!loaded.outdated);
     }
 
     #[test]
@@ -224,6 +238,46 @@ mod tests {
         assert_eq!(key, cache_key(dir.path(), &p));
         fs::write(dir.path().join("a.ts"), "12345").unwrap();
         assert_ne!(key, cache_key(dir.path(), &p));
+    }
+
+    fn committed_repo(d: &Path) -> bool {
+        if !git_ok(d, &["init", "-q"]) {
+            return false; // git not installed
+        }
+        fs::write(d.join("a.ts"), "1").unwrap();
+        assert!(git_ok(d, &["add", "."]));
+        assert!(git_ok(
+            d,
+            &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]
+        ));
+        true
+    }
+
+    #[test]
+    fn git_key_changes_when_a_non_ascii_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        if !committed_repo(d) {
+            return;
+        }
+        let p = project(&["a.ts", "módulo.ts"]);
+        fs::write(d.join("módulo.ts"), "1").unwrap();
+        let before = cache_key(d, &p);
+        fs::write(d.join("módulo.ts"), "12345").unwrap();
+        assert_ne!(before, cache_key(d, &p));
+    }
+
+    #[test]
+    fn git_does_not_run_the_fsmonitor_command_of_the_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        if !committed_repo(d) {
+            return;
+        }
+        assert!(git_ok(d, &["config", "core.fsmonitor", "echo > fsmonitor-ran"]));
+        fs::write(d.join("a.ts"), "changed").unwrap();
+        cache_key(d, &project(&["a.ts"]));
+        assert!(!d.join("fsmonitor-ran").exists());
     }
 
     #[test]

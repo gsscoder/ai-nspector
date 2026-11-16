@@ -1,3 +1,6 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
+mod error;
 mod files;
 mod llm;
 mod modules;
@@ -7,7 +10,7 @@ mod settings;
 mod store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -23,5 +26,4 @@ pub fn run() {
             llm::test_connection,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
 }

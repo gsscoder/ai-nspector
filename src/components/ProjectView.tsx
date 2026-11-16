@@ -1,8 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cancelGeneration, generateModules, loadModules, onModulesProgress } from "@/api";
 import { projectLabel } from "@/lib/project";
 import type { ModulesFile, Project } from "@/types";
+
+// Backend texts about the LLM server, the network or the API key store (see error.rs, llm.rs, settings.rs).
+// The "Set the ... in Settings." messages already name Settings.
+const LLM_CONNECTION_ERROR = /LLM server|Network error|HTTP client|credential store/;
 
 export default function ProjectView({
   repoRoot,
@@ -20,6 +24,8 @@ export default function ProjectView({
   const [stage, setStage] = useState<string | null>(null); // non-null while generating
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
+  const mounted = useRef(false); // a run that outlives this view must not touch the shared state
+  const unlisten = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let stale = false;
@@ -40,17 +46,27 @@ export default function ProjectView({
     return () => clearInterval(timer);
   }, [generating]);
 
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      unlisten.current?.();
+    };
+  }, []);
+
   async function generate() {
     setError(null);
     setStage("Starting");
-    const unlisten = await onModulesProgress(setStage);
     try {
-      setData(await generateModules(repoRoot, project.id));
+      unlisten.current = await onModulesProgress((s) => mounted.current && setStage(s));
+      const result = await generateModules(repoRoot, project.id);
+      if (mounted.current) setData(result);
     } catch (e) {
-      if (String(e) !== "Cancelled") setError(String(e));
+      if (mounted.current && String(e) !== "Cancelled") setError(String(e));
     } finally {
-      unlisten();
-      setStage(null);
+      unlisten.current?.();
+      unlisten.current = null;
+      if (mounted.current) setStage(null);
     }
   }
 
@@ -66,7 +82,7 @@ export default function ProjectView({
         {generating ? (
           <>
             <span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            <span className="text-sm text-muted-foreground">
+            <span role="status" className="text-sm text-muted-foreground">
               {stage}… {seconds}s
             </span>
             <Button variant="outline" onClick={cancelGeneration}>
@@ -82,7 +98,12 @@ export default function ProjectView({
           </span>
         )}
       </div>
-      {error && <p className="text-sm text-destructive">{error} (LLM settings are under Settings.)</p>}
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+          {LLM_CONNECTION_ERROR.test(error) && " (LLM settings are under Settings.)"}
+        </p>
+      )}
       {data && (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {data.modules.map((m) => (

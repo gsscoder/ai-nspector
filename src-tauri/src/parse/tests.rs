@@ -227,6 +227,19 @@ fn unreadable_files_give_empty_file_info() {
 }
 
 #[test]
+fn oversized_files_are_listed_but_not_parsed() {
+    let dir = tempfile::tempdir().unwrap();
+    let padding = "#".repeat(super::MAX_PARSE_BYTES as usize);
+    fs::write(dir.path().join("big.py"), format!("def big(): pass\n{padding}")).unwrap();
+    fs::write(dir.path().join("ok.py"), "import big\n").unwrap();
+
+    let structure = analyze_paths(dir.path(), &["big.py", "ok.py"]).unwrap();
+
+    assert_eq!(edges(&structure), vec![("big.py", vec![]), ("ok.py", vec!["big.py"])]);
+    assert_eq!(symbols(&structure, "big.py"), vec![]);
+}
+
+#[test]
 fn imports_are_unique_sorted_and_never_the_file_itself() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(

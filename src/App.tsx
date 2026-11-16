@@ -11,11 +11,14 @@ function App() {
       <header className="flex items-center justify-between border-b px-4 py-2">
         <h1 className="text-lg font-semibold">ai-nspector</h1>
         <Button variant="outline" onClick={() => setShowSettings(!showSettings)}>
-          Settings
+          {showSettings ? "Back" : "Settings"}
         </Button>
       </header>
       <main className="flex-1 overflow-auto p-4">
-        {showSettings ? <Settings /> : <RepoView />}
+        <div hidden={showSettings}>
+          <RepoView />
+        </div>
+        {showSettings && <Settings />}
       </main>
     </div>
   );

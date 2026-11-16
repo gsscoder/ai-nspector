@@ -13,6 +13,7 @@ export default function ModuleView({ repoRoot, module }: { repoRoot: string; mod
   // Primary files first, then secondary.
   const files = [...module.files].sort((a, b) => Number(b.primary) - Number(a.primary));
   const [selected, setSelected] = useState(files[0]?.path);
+  const [openError, setOpenError] = useState<string | null>(null);
 
   return (
     <div className="flex gap-4">
@@ -26,7 +27,11 @@ export default function ModuleView({ repoRoot, module }: { repoRoot: string; mod
               <li key={f.path}>
                 <button
                   className={`w-full rounded px-2 py-1 text-left text-sm hover:bg-muted ${f.path === selected ? "bg-muted" : ""}`}
-                  onClick={() => setSelected(f.path)}
+                  aria-current={f.path === selected ? "true" : undefined}
+                  onClick={() => {
+                    setSelected(f.path);
+                    setOpenError(null);
+                  }}
                 >
                   {name}
                   {!f.primary && <span className="ml-1 text-xs text-muted-foreground">(secondary)</span>}
@@ -42,10 +47,23 @@ export default function ModuleView({ repoRoot, module }: { repoRoot: string; mod
           <>
             <div className="mb-2 flex items-center justify-between gap-2">
               <span className="truncate text-sm text-muted-foreground">{selected}</span>
-              <Button variant="outline" onClick={() => openInEditor(repoRoot, selected)}>
+              <Button
+                variant="outline"
+                onClick={() =>
+                  openInEditor(repoRoot, selected).then(
+                    () => setOpenError(null),
+                    (e) => setOpenError(`Cannot open the file: ${String(e)}`),
+                  )
+                }
+              >
                 Open in editor
               </Button>
             </div>
+            {openError && (
+              <p role="alert" className="mb-2 text-sm text-destructive">
+                {openError}
+              </p>
+            )}
             <CodeView repoPath={repoRoot} path={selected} />
           </>
         ) : (

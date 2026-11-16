@@ -1,6 +1,7 @@
 //! Module generation: prompt from the project structure, LLM call, validation, cache.
 
 use std::collections::HashSet;
+use std::mem;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -8,6 +9,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
+use crate::error::AppError;
 use crate::parse::{ProjectStructure, analyze_project};
 use crate::scan::{Project, scan_repo};
 use crate::settings::load_llm_config;
@@ -18,14 +20,34 @@ use crate::store::{self, Module, ModuleFile, ModulesFile};
 const MAX_PROMPT_TOKENS: usize = 100_000;
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
+static RUNNING: AtomicBool = AtomicBool::new(false);
 
-const SYSTEM_PROMPT: &str = r#"You split a software project into logical modules.
-Input: one line per source file: `path | imports: ... | symbols: ...`. Imports are other files of the same project.
-Rules:
-- Group files by responsibility, not only by folder. Use 3 to 15 modules.
-- Every file must be in exactly one module with "primary": true. A file may also appear in other modules with "primary": false.
-- Use only the file paths from the input, exactly as written.
-Answer with JSON only, in this shape:
+/// Allows one generation at a time, so the shared `CANCEL` flag and the cache file belong to one run.
+/// Held until dropped: released on return, early `?` and unwinding alike.
+struct RunGuard;
+
+impl RunGuard {
+    fn acquire() -> Result<Self, AppError> {
+        RUNNING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map(|_| Self)
+            .map_err(|_| AppError::Invalid("A generation is already running.".into()))
+    }
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+const SYSTEM_PROMPT: &str = r#"you split a software project into logical modules
+input: one line per source file: `path | imports: ... | symbols: ...`. imports are other files of the same project
+rules:
+- group files by responsibility, not only by folder. use 3 to 15 modules
+- every file must be in exactly one module with "primary": true. a file may also appear in other modules with "primary": false
+- use only the file paths from the input, exactly as written
+answer with JSON only, in this shape:
 {"modules":[{"id":"billing","name":"Billing","purpose":"One short sentence.","files":[{"path":"src/a.ts","primary":true}]}]}"#;
 
 #[derive(Serialize, Clone)]
@@ -63,17 +85,17 @@ fn user_prompt(structure: &ProjectStructure, with_symbols: bool) -> String {
 }
 
 /// Full prompt; drops symbols when too large; errors when still too large.
-fn build_prompt(structure: &ProjectStructure) -> Result<String, String> {
+fn build_prompt(structure: &ProjectStructure) -> Result<String, AppError> {
     for with_symbols in [true, false] {
         let prompt = user_prompt(structure, with_symbols);
         if (prompt.len() + SYSTEM_PROMPT.len()) / 4 <= MAX_PROMPT_TOKENS {
             return Ok(prompt);
         }
     }
-    Err(format!(
+    Err(AppError::Invalid(format!(
         "The project is too large for one request ({} files). Batch split is not available yet.",
         structure.files.len()
-    ))
+    )))
 }
 
 fn slug(name: &str) -> String {
@@ -86,46 +108,64 @@ fn slug(name: &str) -> String {
     if s.is_empty() { "module".into() } else { s }
 }
 
+/// Appends `-2`, `-3`, ... to `id` until it is not in `ids`, then records and returns it.
+fn claim_unique_id(ids: &mut HashSet<String>, mut id: String) -> String {
+    let base_len = id.len();
+    let mut n = 2;
+    while ids.contains(&id) {
+        id.truncate(base_len);
+        id.push_str(&format!("-{n}"));
+        n += 1;
+    }
+    ids.insert(id.clone());
+    id
+}
+
 /// Parses the model answer and enforces the invariants:
 /// unknown paths dropped, every file has exactly one primary module,
 /// files without a module go to "Unassigned".
-fn validate(answer: &str, project_files: &[String]) -> Result<Vec<Module>, String> {
+fn validate(answer: &str, project_files: &[String]) -> Result<Vec<Module>, AppError> {
     // Tolerate text or code fences around the JSON object.
     let json = match (answer.find('{'), answer.rfind('}')) {
         (Some(a), Some(b)) if a < b => &answer[a..=b],
         _ => answer,
     };
     let mut modules = serde_json::from_str::<Response>(json)
-        .map_err(|e| format!("The model did not return the expected JSON: {e}"))?
+        .map_err(|e| AppError::Json("The model did not return the expected JSON".into(), e))?
         .modules;
     if modules.is_empty() {
-        return Err("The model returned no modules.".into());
+        return Err(AppError::Llm("The model returned no modules.".into()));
     }
 
+    // Sets hold the `project_files` strings, so tracking a path never copies it.
     let known: HashSet<&str> = project_files.iter().map(String::as_str).collect();
-    let mut primary_seen: HashSet<String> = HashSet::new();
+    let mut primary_seen: HashSet<&str> = HashSet::new();
     let mut ids: HashSet<String> = HashSet::new();
     for module in &mut modules {
         let mut in_module = HashSet::new();
-        module.files.retain(|f| known.contains(f.path.as_str()) && in_module.insert(f.path.clone()));
-        for file in &mut module.files {
-            if file.primary && !primary_seen.insert(file.path.clone()) {
-                file.primary = false; // second primary claim: first wins
-            }
-        }
-        let base = if module.id.trim().is_empty() { slug(&module.name) } else { slug(&module.id) };
-        let mut id = base.clone();
-        let mut n = 2;
-        while !ids.insert(id.clone()) {
-            id = format!("{base}-{n}");
-            n += 1;
-        }
-        module.id = id;
+        module.files = mem::take(&mut module.files)
+            .into_iter()
+            .filter_map(|mut file| {
+                let path = *known.get(file.path.as_str())?;
+                if !in_module.insert(path) {
+                    return None;
+                }
+                if file.primary && !primary_seen.insert(path) {
+                    file.primary = false; // second primary claim: first wins
+                }
+                Some(file)
+            })
+            .collect();
+        let id = if module.id.trim().is_empty() { slug(&module.name) } else { slug(&module.id) };
+        module.id = claim_unique_id(&mut ids, id);
     }
     // A file with no primary claim gets its first module as primary.
     for module in &mut modules {
         for file in &mut module.files {
-            if !file.primary && primary_seen.insert(file.path.clone()) {
+            if !file.primary
+                && let Some(&path) = known.get(file.path.as_str())
+                && primary_seen.insert(path)
+            {
                 file.primary = true;
             }
         }
@@ -140,7 +180,7 @@ fn validate(answer: &str, project_files: &[String]) -> Result<Vec<Module>, Strin
         .collect();
     if !leftover.is_empty() {
         modules.push(Module {
-            id: "unassigned".into(),
+            id: claim_unique_id(&mut ids, "unassigned".into()),
             name: "Unassigned".into(),
             purpose: "Files the model did not place in a module.".into(),
             files: leftover,
@@ -156,16 +196,16 @@ async fn wait_cancel() {
     }
 }
 
-fn find_project(repo: &Path, project_id: &str) -> Result<Project, String> {
+fn find_project(repo: &Path, project_id: &str) -> Result<Project, AppError> {
     scan_repo(repo)?
         .projects
         .into_iter()
         .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("Project not found: {project_id}"))
+        .ok_or_else(|| AppError::Invalid(format!("Project not found: {project_id}")))
 }
 
 #[tauri::command]
-pub async fn load_modules(repo_path: String, project_id: String) -> Result<Option<ModulesFile>, String> {
+pub async fn load_modules(repo_path: String, project_id: String) -> Result<Option<ModulesFile>, AppError> {
     tauri::async_runtime::spawn_blocking(move || {
         let repo = Path::new(&repo_path);
         let Some(mut file) = store::load(repo, &project_id)? else {
@@ -176,7 +216,7 @@ pub async fn load_modules(repo_path: String, project_id: String) -> Result<Optio
         Ok(Some(file))
     })
     .await
-    .map_err(|e| format!("Loading did not finish: {e}"))?
+    .map_err(|e| AppError::Platform("Loading did not finish".into(), e.into()))?
 }
 
 #[tauri::command]
@@ -185,7 +225,8 @@ pub fn cancel_generation() {
 }
 
 #[tauri::command]
-pub async fn generate_modules(app: AppHandle, repo_path: String, project_id: String) -> Result<ModulesFile, String> {
+pub async fn generate_modules(app: AppHandle, repo_path: String, project_id: String) -> Result<ModulesFile, AppError> {
+    let _run = RunGuard::acquire()?;
     CANCEL.store(false, Ordering::SeqCst);
     let cfg = load_llm_config(&app)?;
 
@@ -196,42 +237,42 @@ pub async fn generate_modules(app: AppHandle, repo_path: String, project_id: Str
         let repo = Path::new(&repo_path);
         let project = find_project(repo, &project_id)?;
         progress(&handle, "Parsing");
-        let structure = analyze_project(repo, &project.files)?;
+        let structure = analyze_project(repo, &project.files).map_err(AppError::Invalid)?;
         let key = store::cache_key(repo, &project);
-        Ok::<_, String>((project, structure, key))
+        Ok::<_, AppError>((project, structure, key))
     })
     .await
-    .map_err(|e| format!("Scanning did not finish: {e}"))??;
+    .map_err(|e| AppError::Platform("Scanning did not finish".into(), e.into()))??;
     if project.files.is_empty() {
-        return Err("The project has no source files.".into());
+        return Err(AppError::Invalid("The project has no source files.".into()));
     }
     let prompt = build_prompt(&structure)?;
 
-    let mut last_error = String::new();
-    for attempt in 0..2 {
-        progress(&app, if attempt == 0 { "Calling model" } else { "Retrying" });
+    let mut retried = false;
+    loop {
+        progress(&app, if retried { "Retrying" } else { "Calling model" });
         let answer = tokio::select! {
             r = crate::llm::complete(&cfg, SYSTEM_PROMPT, &prompt, true) => r?,
-            _ = wait_cancel() => return Err("Cancelled".into()),
+            _ = wait_cancel() => return Err(AppError::Cancelled),
         };
         progress(&app, "Validating");
         match validate(&answer, &project.files) {
             Ok(modules) => {
-                let file = ModulesFile {
-                    project: project.name.clone(),
+                let mut file = ModulesFile {
+                    project: project.name,
                     cache_key,
-                    model: cfg.model.clone(),
+                    model: cfg.model,
                     generated_at: store::now_rfc3339(),
                     modules,
                     outdated: false,
                 };
-                store::save(Path::new(&repo_dir), &project.id, &file)?;
+                store::save(Path::new(&repo_dir), &project.id, &mut file)?;
                 return Ok(file);
             }
-            Err(e) => last_error = e,
+            Err(e) if retried => return Err(e),
+            Err(_) => retried = true,
         }
     }
-    Err(last_error)
 }
 
 #[cfg(test)]
@@ -261,6 +302,23 @@ mod tests {
         let modules = validate(json, &files(&["x.ts", "y.ts"])).unwrap();
         let last = modules.last().unwrap();
         assert_eq!((last.name.as_str(), paths(last)), ("Unassigned", vec![("y.ts", true)]));
+    }
+
+    #[test]
+    fn unassigned_id_is_unique_when_the_model_already_used_it() {
+        let json = r#"{"modules":[{"id":"unassigned","name":"Mine","purpose":"p","files":[{"path":"x.ts","primary":true}]}]}"#;
+        let modules = validate(json, &files(&["x.ts", "y.ts"])).unwrap();
+        assert_eq!(modules.len(), 2);
+        assert_eq!(modules[0].id, "unassigned");
+        assert_eq!((modules[1].name.as_str(), modules[1].id.as_str()), ("Unassigned", "unassigned-2"));
+    }
+
+    #[test]
+    fn only_one_generation_runs_at_a_time() {
+        let first = RunGuard::acquire().unwrap();
+        assert_eq!(RunGuard::acquire().err().unwrap().to_string(), "A generation is already running.");
+        drop(first);
+        assert!(RunGuard::acquire().is_ok());
     }
 
     #[test]
@@ -313,6 +371,6 @@ mod tests {
         // Fits only without symbols.
         let prompt = build_prompt(&big(5_000, 40)).unwrap();
         assert!(!prompt.contains("symbols:"));
-        assert!(build_prompt(&big(20_000, 0)).unwrap_err().contains("20000 files"));
+        assert!(build_prompt(&big(20_000, 0)).unwrap_err().to_string().contains("20000 files"));
     }
 }

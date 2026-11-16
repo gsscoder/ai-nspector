@@ -24,13 +24,18 @@ function isUnencryptedRemote(baseUrl: string): boolean {
   }
 }
 
-function Field(props: { label: string; hint?: string; children: ReactNode }) {
+function Field(props: { label: string; hint?: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <label className="block space-y-1">
-      <span className="text-sm font-medium">{props.label}</span>
-      {props.children}
+    <div className="space-y-1">
+      <div className="flex items-end gap-2">
+        <label className="block flex-1 space-y-1">
+          <span className="text-sm font-medium">{props.label}</span>
+          {props.children}
+        </label>
+        {props.action}
+      </div>
       {props.hint && <span className="block text-xs text-muted-foreground">{props.hint}</span>}
-    </label>
+    </div>
   );
 }
 
@@ -143,23 +148,23 @@ export default function Settings() {
             ? "A key is stored in the OS credential store. Leave empty to keep it."
             : "Saved in the OS credential store. Leave empty for local servers without a key."
         }
-      >
-        <div className="flex gap-2">
-          <input
-            className={inputClass}
-            type="password"
-            autoComplete="off"
-            placeholder={hasApiKey ? "Key stored" : ""}
-            value={apiKey}
-            disabled={disabled}
-            onChange={(e) => setApiKey(e.target.value)}
-          />
-          {hasApiKey && (
+        action={
+          hasApiKey && (
             <Button type="button" variant="outline" disabled={disabled} onClick={onRemoveKey}>
               Remove key
             </Button>
-          )}
-        </div>
+          )
+        }
+      >
+        <input
+          className={inputClass}
+          type="password"
+          autoComplete="off"
+          placeholder={hasApiKey ? "Key stored" : ""}
+          value={apiKey}
+          disabled={disabled}
+          onChange={(e) => setApiKey(e.target.value)}
+        />
       </Field>
 
       <div className="flex items-center gap-2">
@@ -175,7 +180,10 @@ export default function Settings() {
       </div>
 
       {status && (
-        <p className={status.ok ? "text-sm text-green-600 dark:text-green-400" : "text-sm text-destructive"}>
+        <p
+          role={status.ok ? "status" : "alert"}
+          className={status.ok ? "text-sm text-green-600 dark:text-green-400" : "text-sm text-destructive"}
+        >
           {status.text}
         </p>
       )}

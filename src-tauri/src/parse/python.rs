@@ -1,5 +1,6 @@
 //! Python: `import` statements, top-level classes and functions.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use tree_sitter::Node;
@@ -144,7 +145,7 @@ impl<'files> Resolver<'files> {
     fn absolute_from(&self, file: &str, module: &str, names: &[String]) -> Vec<String> {
         self.import_roots(file)
             .into_iter()
-            .map(|root| self.from_targets(&root, module, names))
+            .map(|root| self.resolve_from(&root, module, names))
             .find(|targets| !targets.is_empty())
             .unwrap_or_default()
     }
@@ -157,11 +158,11 @@ impl<'files> Resolver<'files> {
             }
             dir = parent_dir(dir);
         }
-        self.from_targets(dir, module, names)
+        self.resolve_from(dir, module, names)
     }
 
     /// The module file plus every imported name that is itself a module below it.
-    fn from_targets(&self, root: &str, module: &str, names: &[String]) -> Vec<String> {
+    fn resolve_from(&self, root: &str, module: &str, names: &[String]) -> Vec<String> {
         let module_dir = join(root, &module.replace('.', "/"));
         let module_dir = module_dir.trim_end_matches('/');
         self.module_file(root, module)
@@ -170,10 +171,18 @@ impl<'files> Resolver<'files> {
             .collect()
     }
 
-    fn import_roots(&self, file: &str) -> Vec<String> {
-        let mut roots = vec![self.base.clone(), join(&self.base, "src"), self.package_root(file)];
-        let mut seen = BTreeSet::new();
-        roots.retain(|root| seen.insert(root.clone()));
+    fn import_roots(&self, file: &str) -> Vec<Cow<'_, str>> {
+        let candidates = [
+            Cow::Borrowed(self.base.as_str()),
+            Cow::Owned(join(&self.base, "src")),
+            Cow::Owned(self.package_root(file)),
+        ];
+        let mut roots = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            if !roots.contains(&candidate) {
+                roots.push(candidate);
+            }
+        }
         roots
     }
 

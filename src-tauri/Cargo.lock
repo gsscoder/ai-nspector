@@ -42,6 +42,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tree-sitter",
  "tree-sitter-c-sharp",

@@ -104,7 +104,7 @@ export default function RepoScreen({ repo, onClose }: { repo: Repo; onClose: () 
                 onClick={() => setProjectId(p.id)}
               >
                 <div className="font-medium">{projectLabel(p)}</div>
-                <div className="truncate text-sm text-muted-foreground">{p.root === "" || p.root === "." ? "repo root" : p.root}</div>
+                <div className="truncate text-sm text-muted-foreground">{p.root === "" ? "repo root" : p.root}</div>
                 <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="rounded bg-muted px-2 py-0.5 text-foreground">{STACK[p.language]}</span>
                   {p.files.length} {p.files.length === 1 ? "file" : "files"}

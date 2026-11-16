@@ -29,7 +29,8 @@ export const readFile = (repoPath: string, path: string) =>
 // Opens in VS Code (the only app the capability allows: a default handler could run a .py/.js file).
 // Falls back to the file manager when VS Code is not found.
 export async function openInEditor(repoRoot: string, path: string) {
-  const full = `${repoRoot}/${path}`;
+  const separator = repoRoot.includes("\\") ? "\\" : "/";
+  const full = repoRoot + separator + path.split("/").join(separator);
   try {
     await openPath(full, "code");
   } catch {

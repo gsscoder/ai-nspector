@@ -7,6 +7,8 @@ use ignore::WalkBuilder;
 use serde::Serialize;
 use tauri::Manager;
 
+use crate::error::AppError;
+
 const SKIPPED_DIRS: [&str; 8] = [
     "bin",
     "obj",
@@ -17,6 +19,19 @@ const SKIPPED_DIRS: [&str; 8] = [
     "target",
     "__pycache__",
 ];
+const MAX_MANIFEST_BYTES: u64 = 1_000_000;
+// `next` and `nuxt` are in both lists: they serve a page and an API, so the role stays `Unknown`.
+const FRONTEND_PACKAGES: [&str; 6] = ["react", "vue", "svelte", "@angular/core", "next", "nuxt"];
+const BACKEND_PACKAGES: [&str; 7] = [
+    "express",
+    "fastify",
+    "@nestjs/core",
+    "hono",
+    "koa",
+    "next",
+    "nuxt",
+];
+const BACKEND_PYTHON: [&str; 3] = ["fastapi", "flask", "django"];
 const OTHER_PROJECT_ID: &str = "(other)";
 const OTHER_PROJECT_NAME: &str = "(other files)";
 const RECENT_REPOS_FILE: &str = "recent_repos.json";
@@ -31,6 +46,15 @@ pub enum Language {
     Other,
 }
 
+/// Read from the manifest content only; `Unknown` when the signals are absent or mixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Backend,
+    Frontend,
+    Unknown,
+}
+
 /// All paths are relative to the repo root and use forward slashes.
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +62,7 @@ pub struct Project {
     pub id: String,
     pub name: String,
     pub language: Language,
+    pub role: Role,
     /// Project folder; empty for the repo root.
     pub root: String,
     /// Source files owned by this project, sorted.
@@ -57,6 +82,7 @@ struct Manifest {
     name: String,
     dir: String,
     language: Language,
+    role: Role,
     /// Lower wins when one folder holds several manifests of one language.
     priority: u8,
 }
@@ -66,6 +92,7 @@ impl Manifest {
         path: String,
         file_name: &str,
         language: Language,
+        role: Role,
         priority: u8,
         repo_name: &str,
     ) -> Self {
@@ -80,17 +107,19 @@ impl Manifest {
             name,
             dir,
             language,
+            role,
             priority,
         }
     }
 
-    fn to_project(&self) -> Project {
+    fn into_project(self, files: Vec<String>) -> Project {
         Project {
-            id: self.id.clone(),
-            name: self.name.clone(),
+            id: self.id,
+            name: self.name,
             language: self.language,
-            root: self.dir.clone(),
-            files: Vec::new(),
+            role: self.role,
+            root: self.dir,
+            files,
         }
     }
 }
@@ -105,18 +134,18 @@ struct Walked {
     sources: Vec<SourceFile>,
 }
 
-pub fn scan_repo(root: &Path) -> Result<Repo, String> {
+pub fn scan_repo(root: &Path) -> Result<Repo, AppError> {
     if !root.is_dir() {
-        return Err(format!(
+        return Err(AppError::Invalid(format!(
             "cannot open repo: {} is not a directory",
             root.display()
-        ));
+        )));
     }
     let name = root
         .file_name()
         .map_or_else(|| root.to_string_lossy(), |n| n.to_string_lossy())
         .into_owned();
-    let walked = walk_repo(root, &name)?;
+    let walked = walk_repo(root, &name);
     Ok(Repo {
         root: root.to_string_lossy().into_owned(),
         projects: group_into_projects(walked.manifests, walked.sources),
@@ -124,9 +153,10 @@ pub fn scan_repo(root: &Path) -> Result<Repo, String> {
     })
 }
 
-fn walk_repo(root: &Path, repo_name: &str) -> Result<Walked, String> {
+fn walk_repo(root: &Path, repo_name: &str) -> Walked {
     let walker = WalkBuilder::new(root)
         .require_git(false)
+        .parents(false)
         .filter_entry(|entry| {
             let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
             entry.depth() == 0 || !is_dir || !SKIPPED_DIRS.iter().any(|d| entry.file_name() == *d)
@@ -138,7 +168,9 @@ fn walk_repo(root: &Path, repo_name: &str) -> Result<Walked, String> {
         sources: Vec::new(),
     };
     for entry in walker {
-        let entry = entry.map_err(|e| format!("cannot scan {}: {e}", root.display()))?;
+        let Ok(entry) = entry else {
+            continue;
+        };
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
@@ -151,20 +183,24 @@ fn walk_repo(root: &Path, repo_name: &str) -> Result<Walked, String> {
             .collect::<Vec<_>>()
             .join("/");
         let file_name = entry.file_name().to_string_lossy();
-        if let Some((language, priority)) = manifest_kind(&file_name) {
-            walked.manifests.push(Manifest::new(
-                path.clone(),
-                &file_name,
-                language,
-                priority,
-                repo_name,
-            ));
-        }
-        if let Some(language) = source_language(&file_name) {
-            walked.sources.push(SourceFile { path, language });
+        match (manifest_kind(&file_name), source_language(&file_name)) {
+            (Some((language, priority)), source) => {
+                // `setup.py` is both a manifest and a source file.
+                let source_file = source.map(|language| SourceFile {
+                    path: path.clone(),
+                    language,
+                });
+                let role = detect_role(&file_name, &read_manifest(entry.path()));
+                walked.manifests.push(Manifest::new(
+                    path, &file_name, language, role, priority, repo_name,
+                ));
+                walked.sources.extend(source_file);
+            }
+            (None, Some(language)) => walked.sources.push(SourceFile { path, language }),
+            (None, None) => {}
         }
     }
-    Ok(walked)
+    walked
 }
 
 fn manifest_kind(file_name: &str) -> Option<(Language, u8)> {
@@ -175,6 +211,43 @@ fn manifest_kind(file_name: &str) -> Option<(Language, u8)> {
         "package.json" => Some((Language::Typescript, 0)),
         _ if file_name.ends_with(".csproj") => Some((Language::Dotnet, 0)),
         _ => None,
+    }
+}
+
+fn read_manifest(path: &Path) -> String {
+    fs::metadata(path)
+        .ok()
+        .filter(|m| m.len() <= MAX_MANIFEST_BYTES)
+        .and_then(|_| fs::read_to_string(path).ok())
+        .unwrap_or_default()
+}
+
+// ponytail: plain name match, no version or script check; a mixed signal gives `Unknown`.
+fn detect_role(file_name: &str, text: &str) -> Role {
+    let (frontend, backend) = match file_name {
+        "package.json" => {
+            let json: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+            let has = |names: &[&str]| {
+                ["dependencies", "devDependencies"]
+                    .iter()
+                    .any(|section| names.iter().any(|name| json[*section].get(*name).is_some()))
+            };
+            (has(&FRONTEND_PACKAGES), has(&BACKEND_PACKAGES))
+        }
+        "pyproject.toml" | "setup.py" | "requirements.txt" => {
+            let text = text.to_lowercase();
+            (false, BACKEND_PYTHON.iter().any(|name| text.contains(name)))
+        }
+        _ if file_name.ends_with(".csproj") => (
+            text.contains("Microsoft.NET.Sdk.BlazorWebAssembly\""),
+            text.contains("Microsoft.NET.Sdk.Web\""),
+        ),
+        _ => (false, false),
+    };
+    match (frontend, backend) {
+        (true, false) => Role::Frontend,
+        (false, true) => Role::Backend,
+        _ => Role::Unknown,
     }
 }
 
@@ -193,38 +266,47 @@ fn parent_dir(path: &str) -> &str {
 
 /// A project exists only if it owns at least one source file.
 fn group_into_projects(manifests: Vec<Manifest>, mut sources: Vec<SourceFile>) -> Vec<Project> {
-    let mut by_location: BTreeMap<(&str, Language), &Manifest> = BTreeMap::new();
-    for manifest in &manifests {
+    let mut by_location: BTreeMap<(&str, Language), (usize, &Manifest)> = BTreeMap::new();
+    for (index, manifest) in manifests.iter().enumerate() {
         by_location
             .entry((manifest.dir.as_str(), manifest.language))
             .and_modify(|best| {
-                if (manifest.priority, &manifest.id) < (best.priority, &best.id) {
-                    *best = manifest;
+                if (manifest.priority, &manifest.id) < (best.1.priority, &best.1.id) {
+                    *best = (index, manifest);
                 }
             })
-            .or_insert(manifest);
+            .or_insert((index, manifest));
     }
 
     sources.sort_by(|a, b| a.path.cmp(&b.path));
-    let mut owned: BTreeMap<&str, Project> = BTreeMap::new();
+    let mut files_by_manifest: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut other_files = Vec::new();
     for source in sources {
         match nearest_manifest(&by_location, &source) {
-            Some(manifest) => owned
-                .entry(manifest.id.as_str())
-                .or_insert_with(|| manifest.to_project())
-                .files
+            Some(index) => files_by_manifest
+                .entry(index)
+                .or_default()
                 .push(source.path),
             None => other_files.push(source.path),
         }
     }
 
-    let mut projects: Vec<Project> = owned.into_values().collect();
+    let mut projects: Vec<Project> = manifests
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, manifest)| {
+            files_by_manifest
+                .remove(&index)
+                .map(|files| manifest.into_project(files))
+        })
+        .collect();
+    projects.sort_by(|a, b| a.id.cmp(&b.id));
     if !other_files.is_empty() {
         projects.push(Project {
             id: OTHER_PROJECT_ID.to_string(),
             name: OTHER_PROJECT_NAME.to_string(),
             language: Language::Other,
+            role: Role::Unknown,
             root: String::new(),
             files: other_files,
         });
@@ -232,14 +314,15 @@ fn group_into_projects(manifests: Vec<Manifest>, mut sources: Vec<SourceFile>) -
     projects
 }
 
-fn nearest_manifest<'a>(
-    by_location: &BTreeMap<(&str, Language), &'a Manifest>,
+/// Index in the manifest list of the manifest that owns `source`.
+fn nearest_manifest(
+    by_location: &BTreeMap<(&str, Language), (usize, &Manifest)>,
     source: &SourceFile,
-) -> Option<&'a Manifest> {
+) -> Option<usize> {
     let mut dir = parent_dir(&source.path);
     loop {
-        if let Some(manifest) = by_location.get(&(dir, source.language)) {
-            return Some(manifest);
+        if let Some((index, _)) = by_location.get(&(dir, source.language)) {
+            return Some(*index);
         }
         if dir.is_empty() {
             return None;
@@ -248,48 +331,56 @@ fn nearest_manifest<'a>(
     }
 }
 
-fn read_recent_repos(file: &Path) -> Result<Vec<String>, String> {
+fn read_recent_repos(file: &Path) -> Result<Vec<String>, AppError> {
     let text = match fs::read_to_string(file) {
         Ok(text) => text,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("cannot read {}: {e}", file.display())),
+        Err(e) => return Err(AppError::Io(format!("cannot read {}", file.display()), e)),
     };
-    serde_json::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", file.display()))
+    Ok(serde_json::from_str(&text).unwrap_or_default())
 }
 
 /// Puts `repo` first, removes its older entry, and keeps at most `MAX_RECENT_REPOS` entries.
-fn add_recent_repo(file: &Path, repo: &str) -> Result<(), String> {
+fn add_recent_repo(file: &Path, repo: &str) -> Result<(), AppError> {
     let mut recent = read_recent_repos(file)?;
     recent.retain(|existing| existing != repo);
     recent.insert(0, repo.to_string());
     recent.truncate(MAX_RECENT_REPOS);
 
     let text = serde_json::to_string(&recent)
-        .map_err(|e| format!("cannot write {}: {e}", file.display()))?;
+        .map_err(|e| AppError::Json(format!("cannot write {}", file.display()), e))?;
     if let Some(folder) = file.parent() {
         fs::create_dir_all(folder)
-            .map_err(|e| format!("cannot create {}: {e}", folder.display()))?;
+            .map_err(|e| AppError::Io(format!("cannot create {}", folder.display()), e))?;
     }
-    fs::write(file, text).map_err(|e| format!("cannot write {}: {e}", file.display()))
+    let temp = file.with_extension("json.tmp");
+    fs::write(&temp, text)
+        .and_then(|()| fs::rename(&temp, file))
+        .map_err(|e| AppError::Io(format!("cannot write {}", file.display()), e))
 }
 
-fn recent_repos_file(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+fn recent_repos_file(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
     let folder = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("cannot find the app data folder: {e}"))?;
+        .map_err(|e| AppError::Platform("cannot find the app data folder".into(), e.into()))?;
     Ok(folder.join(RECENT_REPOS_FILE))
 }
 
 #[tauri::command]
-pub async fn open_repo(app: tauri::AppHandle, path: String) -> Result<Repo, String> {
-    let repo = scan_repo(Path::new(&path))?;
-    add_recent_repo(&recent_repos_file(&app)?, &path)?;
-    Ok(repo)
+pub async fn open_repo(app: tauri::AppHandle, path: String) -> Result<Repo, AppError> {
+    let recent_file = recent_repos_file(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = scan_repo(Path::new(&path))?;
+        let _ = recent_file.and_then(|file| add_recent_repo(&file, &path));
+        Ok(repo)
+    })
+    .await
+    .map_err(|e| AppError::Platform("scanning did not finish".into(), e.into()))?
 }
 
 #[tauri::command]
-pub fn list_recent_repos(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+pub fn list_recent_repos(app: tauri::AppHandle) -> Result<Vec<String>, AppError> {
     read_recent_repos(&recent_repos_file(&app)?)
 }
 
@@ -309,9 +400,108 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             language,
+            role: Role::Unknown,
             root: root.to_string(),
             files: files.iter().map(|f| f.to_string()).collect(),
         }
+    }
+
+    fn role_of(file_name: &str, text: &str) -> Role {
+        let dir = tempfile::Builder::new().prefix("role-").tempdir().unwrap();
+        fs::write(dir.path().join(file_name), text).unwrap();
+        let ext = if file_name.ends_with(".csproj") {
+            "Program.cs"
+        } else if file_name.ends_with(".json") {
+            "a.ts"
+        } else {
+            "a.py"
+        };
+        fs::write(dir.path().join(ext), "x").unwrap();
+        scan_repo(dir.path()).unwrap().projects[0].role
+    }
+
+    #[test]
+    fn role_comes_from_manifest_content() {
+        let react = r#"{ "devDependencies": { "react": "19" } }"#;
+        assert_eq!(role_of("package.json", react), Role::Frontend);
+        assert_eq!(
+            role_of("package.json", r#"{ "dependencies": { "express": "5" } }"#),
+            Role::Backend
+        );
+        assert_eq!(
+            role_of("pyproject.toml", "dependencies = [\"FastAPI>=0.1\"]"),
+            Role::Backend
+        );
+        assert_eq!(role_of("requirements.txt", "Flask==3\n"), Role::Backend);
+        assert_eq!(
+            role_of(
+                "A.csproj",
+                r#"<Project Sdk="Microsoft.NET.Sdk.Web"></Project>"#
+            ),
+            Role::Backend
+        );
+        assert_eq!(
+            role_of(
+                "A.csproj",
+                r#"<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly"></Project>"#
+            ),
+            Role::Frontend
+        );
+    }
+
+    #[test]
+    fn role_is_unknown_without_a_clear_signal() {
+        assert_eq!(
+            role_of(
+                "package.json",
+                r#"{ "dependencies": { "react": "19", "express": "5" } }"#
+            ),
+            Role::Unknown
+        );
+        assert_eq!(
+            role_of("package.json", r#"{ "dependencies": { "next": "15" } }"#),
+            Role::Unknown
+        );
+        assert_eq!(role_of("package.json", "not json"), Role::Unknown);
+        assert_eq!(
+            role_of("pyproject.toml", "[project]\nname = \"cli\"\n"),
+            Role::Unknown
+        );
+        assert_eq!(
+            role_of("A.csproj", r#"<Project Sdk="Microsoft.NET.Sdk"></Project>"#),
+            Role::Unknown
+        );
+    }
+
+    #[test]
+    fn root_projects_of_two_languages_get_their_own_roles() {
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "dependencies": { "vue": "3" } }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "dependencies = [\"django\"]",
+        )
+        .unwrap();
+        write_files(dir.path(), &["web.ts", "app.py"]);
+
+        let roles: Vec<(Language, Role)> = scan_repo(dir.path())
+            .unwrap()
+            .projects
+            .iter()
+            .map(|p| (p.language, p.role))
+            .collect();
+
+        assert_eq!(
+            roles,
+            vec![
+                (Language::Typescript, Role::Frontend),
+                (Language::Python, Role::Backend)
+            ]
+        );
     }
 
     fn write_files(root: &Path, files: &[&str]) {
@@ -479,6 +669,18 @@ mod tests {
     }
 
     #[test]
+    fn walk_ignores_gitignore_files_above_the_repo() {
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), "ignored.py\n").unwrap();
+        let root = dir.path().join("repo");
+        write_files(&root, &["kept.py", "ignored.py"]);
+
+        let repo = scan_repo(&root).unwrap();
+
+        assert_eq!(repo.projects[0].files, vec!["ignored.py", "kept.py"]);
+    }
+
+    #[test]
     fn pyproject_wins_over_setup_py_in_one_folder() {
         let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
         write_files(dir.path(), &["setup.py", "pyproject.toml", "m.py"]);
@@ -501,7 +703,9 @@ mod tests {
     #[test]
     fn scan_rejects_a_path_that_is_not_a_directory() {
         let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
-        let error = scan_repo(&dir.path().join("missing")).unwrap_err();
+        let error = scan_repo(&dir.path().join("missing"))
+            .unwrap_err()
+            .to_string();
 
         assert!(error.contains("is not a directory"), "{error}");
     }
@@ -542,15 +746,13 @@ mod tests {
     }
 
     #[test]
-    fn recent_repos_reports_a_corrupt_file() {
+    fn recent_repos_corrupt_file_is_empty_and_replaced_by_the_next_repo() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join(RECENT_REPOS_FILE);
         fs::write(&file, "not json").unwrap();
 
-        assert!(
-            read_recent_repos(&file)
-                .unwrap_err()
-                .contains("cannot parse")
-        );
+        assert_eq!(read_recent_repos(&file).unwrap(), Vec::<String>::new());
+        add_recent_repo(&file, "a").unwrap();
+        assert_eq!(read_recent_repos(&file).unwrap(), vec!["a"]);
     }
 }
