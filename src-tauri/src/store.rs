@@ -54,8 +54,25 @@ fn fnv(parts: impl IntoIterator<Item = String>) -> String {
     format!("{hash:016x}")
 }
 
+pub fn store_dir(repo: &Path) -> PathBuf {
+    repo.join(".ainspector")
+}
+
 fn modules_dir(repo: &Path) -> PathBuf {
-    repo.join(".ainspector").join("modules")
+    store_dir(repo).join("modules")
+}
+
+/// Creates `<repo>/.ainspector/` and, only when absent, its `.gitignore` with `*`.
+pub fn ensure_store_dir(repo: &Path) -> Result<PathBuf, AppError> {
+    let dir = store_dir(repo);
+    fs::create_dir_all(&dir)
+        .map_err(|e| AppError::Io(format!("Cannot write to {}", dir.display()), e))?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        fs::write(&ignore, "*\n")
+            .map_err(|e| AppError::Io(format!("Cannot write {}", ignore.display()), e))?;
+    }
+    Ok(dir)
 }
 
 fn file_name(project_id: &str) -> String {
@@ -71,13 +88,9 @@ fn file_name(project_id: &str) -> String {
 pub fn save(repo: &Path, project_id: &str, file: &mut ModulesFile) -> Result<(), AppError> {
     let dir = modules_dir(repo);
     let path = dir.join(file_name(project_id));
+    ensure_store_dir(repo)?;
     fs::create_dir_all(&dir)
         .map_err(|e| AppError::Io(format!("Cannot write to {}", dir.display()), e))?;
-    let ignore = repo.join(".ainspector").join(".gitignore");
-    if !ignore.exists() {
-        fs::write(&ignore, "*\n")
-            .map_err(|e| AppError::Io(format!("Cannot write {}", ignore.display()), e))?;
-    }
     file.outdated = false;
     let json = serde_json::to_string_pretty(file)
         .map_err(|e| AppError::Json("Cannot serialize the modules".into(), e))?;
@@ -153,9 +166,13 @@ pub fn cache_key(repo: &Path, project: &Project) -> String {
     format!("fp:{}", fingerprint(repo, project.files.iter().map(String::as_str)))
 }
 
-/// Current UTC time as RFC 3339 (no date crate needed).
 pub fn now_rfc3339() -> String {
-    let secs = SystemTime::now()
+    rfc3339(SystemTime::now())
+}
+
+/// `time` as RFC 3339, UTC (no date crate needed).
+pub fn rfc3339(time: SystemTime) -> String {
+    let secs = time
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
     let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
@@ -226,6 +243,12 @@ mod tests {
         let now = now_rfc3339();
         assert_eq!(now.len(), 20);
         assert!(now.starts_with("20") && now.ends_with('Z'), "{now}");
+    }
+
+    #[test]
+    fn rfc3339_formats_a_given_time() {
+        let time = UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        assert_eq!(rfc3339(time), "2023-11-14T22:13:20Z");
     }
 
     #[test]

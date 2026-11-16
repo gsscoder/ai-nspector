@@ -4,6 +4,7 @@ mod error;
 mod files;
 mod llm;
 mod modules;
+mod overview;
 mod parse;
 mod scan;
 mod settings;
@@ -21,6 +22,8 @@ pub fn run() -> tauri::Result<()> {
             modules::load_modules,
             modules::generate_modules,
             modules::cancel_generation,
+            overview::load_overview,
+            overview::generate_overview,
             settings::get_settings,
             settings::save_settings,
             llm::test_connection,

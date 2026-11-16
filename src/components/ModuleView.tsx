@@ -3,12 +3,8 @@ import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import CodeView from "@/components/CodeView";
 import { openInEditor } from "@/api";
+import { splitPath } from "@/lib/project";
 import type { Module } from "@/types";
-
-const split = (path: string) => {
-  const i = path.lastIndexOf("/");
-  return { name: path.slice(i + 1), dir: i < 0 ? "" : path.slice(0, i) };
-};
 
 export default function ModuleView({ repoRoot, module }: { repoRoot: string; module: Module }) {
   // Primary files first, then secondary.
@@ -23,7 +19,7 @@ export default function ModuleView({ repoRoot, module }: { repoRoot: string; mod
         <p className="mt-1 mb-4 text-sm text-muted-foreground">{module.purpose}</p>
         <ul className="flex flex-col gap-0.5">
           {files.map((f) => {
-            const { name, dir } = split(f.path);
+            const { name, dir } = splitPath(f.path);
             return (
               <li key={f.path}>
                 <button

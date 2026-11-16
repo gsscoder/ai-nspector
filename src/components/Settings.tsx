@@ -39,7 +39,7 @@ function Field(props: { label: string; hint?: string; action?: ReactNode; childr
   );
 }
 
-export default function Settings() {
+export default function Settings({ onSaved }: { onSaved?: () => void }) {
   const [saved, setSaved] = useState<LlmSettings>({ baseUrl: "", model: "" });
   const [form, setForm] = useState<LlmSettings>({ baseUrl: "", model: "" });
   const [apiKey, setApiKey] = useState("");
@@ -63,6 +63,7 @@ export default function Settings() {
   async function persist() {
     await saveSettings(form, apiKey.trim() === "" ? undefined : apiKey);
     await reload();
+    onSaved?.();
   }
 
   async function run(kind: Busy, action: () => Promise<string | void>) {
@@ -98,6 +99,7 @@ export default function Settings() {
     run("removeKey", async () => {
       await saveSettings(saved, "");
       setHasApiKey(false);
+      onSaved?.();
       return "API key removed.";
     });
 

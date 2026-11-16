@@ -1,13 +1,22 @@
-import { useState } from "react";
 import RepoScreen from "@/components/RepoScreen";
 import StartScreen from "@/components/StartScreen";
-import type { Repo } from "@/types";
+import type { OverviewInfo, Repo } from "@/types";
 
-export default function RepoView() {
-  const [repo, setRepo] = useState<Repo | null>(null);
-
+export default function RepoView({
+  repo,
+  overview,
+  onOpen,
+  onOverviewChange,
+  onClose,
+}: {
+  repo: Repo | null;
+  overview: OverviewInfo | null | undefined;
+  onOpen: (repo: Repo) => void;
+  onOverviewChange: (info: OverviewInfo) => void;
+  onClose: () => void;
+}) {
   if (repo) {
-    return <RepoScreen repo={repo} onClose={() => setRepo(null)} />;
+    return <RepoScreen repo={repo} overview={overview} onOverviewChange={onOverviewChange} onClose={onClose} />;
   }
-  return <StartScreen onOpen={setRepo} />;
+  return <StartScreen onOpen={onOpen} />;
 }

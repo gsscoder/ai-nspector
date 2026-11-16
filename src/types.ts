@@ -13,10 +13,18 @@ export interface Project {
   files: string[];
 }
 
+// Documentation file candidate for the repo overview; size in bytes. The backend sorts suggested files first.
+export interface DocFile {
+  path: string;
+  size: number;
+  suggested: boolean;
+}
+
 export interface Repo {
   root: string;
   name: string;
   projects: Project[];
+  docs: DocFile[];
 }
 
 // Mirror the structs in src-tauri/src/store.rs.
@@ -39,4 +47,9 @@ export interface ModulesFile {
   generatedAt: string;
   modules: Module[];
   outdated: boolean;
+}
+
+// Mirrors the struct in src-tauri/src/overview.rs. generatedAt is RFC 3339.
+export interface OverviewInfo {
+  generatedAt: string;
 }

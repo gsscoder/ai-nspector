@@ -29,6 +29,7 @@
 - Works with OpenAI, OpenRouter (Claude), Azure OpenAI, Ollama, LM Studio; local models solve the privacy risk
 - API key: OS credential store via `keyring` crate (Windows Credential Manager, Linux Secret Service)
 - Module generation: AI only, input is structure (file tree + imports + top-level symbols); no deterministic clustering in the MVP
+- Repo overview: input is the text of doc files the user selects; never source code
 - Output: JSON; validate with serde; invalid → retry once, then show an error (default)
 - Input too large for the context: drop symbols first; still too large → error with the file count; batch split is later
 ## Modules
@@ -51,8 +52,53 @@
   ]
 }
 ```
+## Repo overview
+- One overview per repo, not per project
+- UI
+  - "Overview" button (`BookOpen` icon) in the nav, before the repo crumb; visible at every level
+  - An overview exists only when both `brief.md` and `overview.md` exist; the button then shows a dot; "Generated <date>" comes from the modified time of `brief.md`
+  - Notices: full-width light blue boxes under the top bar, each with its own X, session only; "no overview" (repo open, overview missing) and "LLM not configured" (empty base URL or model; the API key is optional)
+  - The "Projects" heading above the project cards is removed
+- Doc candidates: deterministic, no AI; collected by `scan`, sent in `Repo.docs` (path, size, suggested)
+  - Second walk, limited to `.github/`, `.agent-files/`, `.cursor/`: the `ignore` crate also skips Windows-hidden files, so a hidden-aware main walk would change project detection
+  - The generate command accepts only paths from this list
+  - Extensions: `.md`, `.mdx`, `.markdown`, `.rst`, `.adoc`; `.txt` only with a doc-like name (`README`, `NOTES`, `ABOUT`, ...), so `requirements.txt` and `CMakeLists.txt` are out
+  - Hidden folders and files allowed for docs only: `.github/`, `.agent-files/`, `.cursor/`, `CLAUDE.md`, `AGENTS.md`
+  - Skip `.ainspector/` and the usual walk exclusions
+  - Suggested (pre-checked): `README*` at the repo root and at each project root; `ARCHITECTURE`, `DESIGN`, `OVERVIEW`, `INTENT`, `SPEC`; top-level files in `docs/`; agent files
+  - Listed but not checked: `CHANGELOG`, `LICENSE`, `CODE_OF_CONDUCT`, `SECURITY`, issue/PR templates, deep files
+  - Sort: suggested first, then depth, then path
+- Popup: shadcn Dialog; one native checkbox per file with path and size
+  - Footer: selected count and token estimate (chars / 4); Generate disabled for 0 files or over `MAX_PROMPT_TOKENS`
+  - While running: stage, seconds, Cancel; shares the global generation lock with module generation
+  - No remembered selection: each open starts from the suggested files
+- Generation: 2 LLM calls
+  1. `overview.md` from the selected doc texts + the project list from `scan` (name, language, root)
+  2. `brief.md` from the overview only: 5 to 8 bullets, about 150 words max
+  - Reason: long markdown inside JSON breaks often with small models; the brief always matches the overview
+  - Output language: English
+- Prompt rules (call 1)
+  - Use only facts about what the project is, does, who it is for, how it is built, its status
+  - Ignore conduct rules, contribution/PR policies, license text, templates, release notes, tooling instructions, also when selected
+  - Write only facts from the sources; a heading without facts gets "Not documented."
+  - No useful source at all → answer exactly `INSUFFICIENT_SOURCES`
+- Overview headings (fixed): Purpose, Users, Features, Projects and architecture, Tech stack, Status, Gaps or conflicts in the docs
+- Validation (after call 1; call 2 runs only on success)
+  - `INSUFFICIENT_SOURCES` → error "The selected files do not describe the project. Select other files."; no retry
+  - Missing headings or all headings "Not documented." → retry once, then the same error
+- Inferred mode (no doc files, or the user chooses it after `INSUFFICIENT_SOURCES`)
+  - Popup with an empty `Repo.docs`: no file list; text "No documentation found. The app can infer the overview from the repo structure: file paths and manifest files. No source code is sent. The result can be less accurate."; buttons Cancel and Generate; same progress and Cancel while running
+  - After the `INSUFFICIENT_SOURCES` error (docs exist but are useless) the popup also offers "Infer from structure"
+  - Input (structure only): project list, file paths per project, text of each project manifest (`Project.id` is the manifest path), module names and purposes from the module caches when they exist; same `MAX_PROMPT_TOKENS` check; too large → drop file paths to folder counts, still too large → error
+  - Separate prompt; no `INSUFFICIENT_SOURCES` sentinel (structure always gives some facts); same fixed headings, same validation (missing headings or all "Not documented." → retry once, then error)
+  - The code writes the first line of `overview.md`: `Source: inferred from repo structure; no documentation found` (the model does not write it); `brief.md` is made from the overview body as before
+  - No projects and no docs → error, no LLM call
+  - Command: `generate_overview(repo_path, files, infer)`; `infer = true` needs an empty `files`, `infer = false` keeps the rules above
+- Storage: `<repo>/.ainspector/brief.md` and `overview.md`; no metadata file, no cache key, no "outdated" badge
+  - Overwrite only after both calls succeed: write temp files, then rename; on error or cancel the old files stay
+- Security: doc text is untrusted; later prompts that include `overview.md` or `brief.md` must mark it as data, not instructions
 ## Storage and cache
-- Repo-specific data lives in the inspected repo: `<repo>/.ainspector/` (modules now, analysis findings later)
+- Repo-specific data lives in the inspected repo: `<repo>/.ainspector/` (modules and repo overview now, analysis findings later)
   - Git-ignored by default: on first create, the app writes `.ainspector/.gitignore` with the content `*`; the repo's own `.gitignore` is never edited
   - Team sharing: delete `.ainspector/.gitignore` and commit the folder
   - All paths inside are relative to the repo root (portable across clones and moves)

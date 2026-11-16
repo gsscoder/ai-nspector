@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use ignore::WalkBuilder;
+use ignore::{DirEntry, WalkBuilder};
 use serde::Serialize;
 use tauri::Manager;
 
@@ -18,6 +18,34 @@ const SKIPPED_DIRS: [&str; 8] = [
     ".ainspector",
     "target",
     "__pycache__",
+];
+/// Hidden folders at the repo root that the doc walk enters; the project walk never does.
+const HIDDEN_DOC_DIRS: [&str; 3] = [".github", ".agent-files", ".cursor"];
+/// Hidden folders whose files are all suggested.
+const AGENT_DIRS: [&str; 2] = [".agent-files", ".cursor"];
+const DOC_EXTENSIONS: [&str; 5] = ["md", "mdx", "markdown", "rst", "adoc"];
+/// A `.txt` file is a doc only with one of these names, so `requirements.txt` is not.
+const TEXT_DOC_NAMES: [&str; 10] = [
+    "README",
+    "NOTES",
+    "ABOUT",
+    "OVERVIEW",
+    "ARCHITECTURE",
+    "DESIGN",
+    "INTENT",
+    "SPEC",
+    "CHANGELOG",
+    "LICENSE",
+];
+/// Suggested at the repo root and at a project root, besides `README*`.
+const SUGGESTED_NAMES: [&str; 7] = [
+    "ARCHITECTURE",
+    "DESIGN",
+    "OVERVIEW",
+    "INTENT",
+    "SPEC",
+    "CLAUDE",
+    "AGENTS",
 ];
 const MAX_MANIFEST_BYTES: u64 = 1_000_000;
 // `next` and `nuxt` are in both lists: they serve a page and an API, so the role stays `Unknown`.
@@ -69,12 +97,25 @@ pub struct Project {
     pub files: Vec<String>,
 }
 
+/// A documentation file the user can pick for the repo overview.
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocFile {
+    /// Relative to the repo root, forward slashes.
+    pub path: String,
+    pub size: u64,
+    /// Pre-checked in the overview dialog.
+    pub suggested: bool,
+}
+
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Repo {
     pub root: String,
     pub name: String,
     pub projects: Vec<Project>,
+    /// Suggested first, then by folder depth, then by path.
+    pub docs: Vec<DocFile>,
 }
 
 struct Manifest {
@@ -132,6 +173,7 @@ struct SourceFile {
 struct Walked {
     manifests: Vec<Manifest>,
     sources: Vec<SourceFile>,
+    docs: Vec<DocFile>,
 }
 
 pub fn scan_repo(root: &Path) -> Result<Repo, AppError> {
@@ -145,43 +187,60 @@ pub fn scan_repo(root: &Path) -> Result<Repo, AppError> {
         .file_name()
         .map_or_else(|| root.to_string_lossy(), |n| n.to_string_lossy())
         .into_owned();
-    let walked = walk_repo(root, &name);
+    let mut walked = walk_repo(root, &name);
+    walked.docs.extend(walk_hidden_docs(root));
+    let projects = group_into_projects(walked.manifests, walked.sources);
+    rank_docs(&mut walked.docs, &projects);
     Ok(Repo {
         root: root.to_string_lossy().into_owned(),
-        projects: group_into_projects(walked.manifests, walked.sources),
+        projects,
+        docs: walked.docs,
         name,
     })
+}
+
+fn is_skipped_dir(entry: &DirEntry) -> bool {
+    entry.file_type().is_some_and(|t| t.is_dir())
+        && SKIPPED_DIRS.iter().any(|d| entry.file_name() == *d)
+}
+
+fn relative_path(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    Some(
+        relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
 }
 
 fn walk_repo(root: &Path, repo_name: &str) -> Walked {
     let walker = WalkBuilder::new(root)
         .require_git(false)
         .parents(false)
-        .filter_entry(|entry| {
-            let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
-            entry.depth() == 0 || !is_dir || !SKIPPED_DIRS.iter().any(|d| entry.file_name() == *d)
-        })
+        .filter_entry(|entry| entry.depth() == 0 || !is_skipped_dir(entry))
         .build();
 
     let mut walked = Walked {
         manifests: Vec::new(),
         sources: Vec::new(),
+        docs: Vec::new(),
     };
     for entry in walker {
         let Ok(entry) = entry else {
             continue;
         };
+        if let Some(doc) = doc_file(root, &entry) {
+            walked.docs.push(doc);
+            continue;
+        }
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        let Ok(relative) = entry.path().strip_prefix(root) else {
+        let Some(path) = relative_path(root, entry.path()) else {
             continue;
         };
-        let path = relative
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
         let file_name = entry.file_name().to_string_lossy();
         match (manifest_kind(&file_name), source_language(&file_name)) {
             (Some((language, priority)), source) => {
@@ -201,6 +260,88 @@ fn walk_repo(root: &Path, repo_name: &str) -> Walked {
         }
     }
     walked
+}
+
+/// Docs inside the hidden folders of `HIDDEN_DOC_DIRS`. A second walk keeps the project walk
+/// unchanged; it starts at the repo root, so the root `.gitignore` applies.
+fn walk_hidden_docs(root: &Path) -> Vec<DocFile> {
+    WalkBuilder::new(root)
+        .require_git(false)
+        .parents(false)
+        .hidden(false)
+        .filter_entry(|entry| match entry.depth() {
+            0 => true,
+            1 => {
+                entry.file_type().is_some_and(|t| t.is_dir())
+                    && HIDDEN_DOC_DIRS.iter().any(|d| entry.file_name() == *d)
+            }
+            _ => !entry.file_name().to_string_lossy().starts_with('.') && !is_skipped_dir(entry),
+        })
+        .build()
+        .filter_map(Result::ok)
+        .filter_map(|entry| doc_file(root, &entry))
+        .collect()
+}
+
+fn doc_file(root: &Path, entry: &DirEntry) -> Option<DocFile> {
+    if !entry.file_type().is_some_and(|t| t.is_file())
+        || !is_doc(&entry.file_name().to_string_lossy())
+    {
+        return None;
+    }
+    Some(DocFile {
+        path: relative_path(root, entry.path())?,
+        size: entry.metadata().ok()?.len(),
+        suggested: false,
+    })
+}
+
+fn is_doc(file_name: &str) -> bool {
+    let Some((stem, extension)) = file_name.rsplit_once('.') else {
+        return false;
+    };
+    DOC_EXTENSIONS
+        .iter()
+        .any(|e| extension.eq_ignore_ascii_case(e))
+        || (extension.eq_ignore_ascii_case("txt")
+            && TEXT_DOC_NAMES.iter().any(|n| stem.eq_ignore_ascii_case(n)))
+}
+
+/// `project_roots` are the folders of the detected projects; the repo root always counts.
+fn is_suggested(path: &str, project_roots: &[&str]) -> bool {
+    if let Some((top, _)) = path.split_once('/')
+        && AGENT_DIRS.contains(&top)
+    {
+        return true;
+    }
+    let dir = parent_dir(path);
+    if dir == "docs" {
+        return true;
+    }
+    let file_name = path.rsplit_once('/').map_or(path, |(_, name)| name);
+    let stem = file_name
+        .rsplit_once('.')
+        .map_or(file_name, |(stem, _)| stem);
+    let is_readme = stem
+        .as_bytes()
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"README"));
+    (dir.is_empty() || project_roots.contains(&dir))
+        && (is_readme || SUGGESTED_NAMES.iter().any(|n| stem.eq_ignore_ascii_case(n)))
+}
+
+fn rank_docs(docs: &mut [DocFile], projects: &[Project]) {
+    let roots: Vec<&str> = projects.iter().map(|p| p.root.as_str()).collect();
+    for doc in docs.iter_mut() {
+        doc.suggested = is_suggested(&doc.path, &roots);
+    }
+    let depth = |path: &str| path.matches('/').count();
+    docs.sort_by(|a, b| {
+        b.suggested
+            .cmp(&a.suggested)
+            .then_with(|| depth(&a.path).cmp(&depth(&b.path)))
+            .then_with(|| a.path.cmp(&b.path))
+    });
 }
 
 fn manifest_kind(file_name: &str) -> Option<(Language, u8)> {
@@ -698,6 +839,228 @@ mod tests {
         write_files(dir.path(), &["package.json", "App.sln", "README.md"]);
 
         assert!(scan_repo(dir.path()).unwrap().projects.is_empty());
+    }
+
+    fn docs_of(root: &Path) -> Vec<(String, bool)> {
+        scan_repo(root)
+            .unwrap()
+            .docs
+            .into_iter()
+            .map(|d| (d.path, d.suggested))
+            .collect()
+    }
+
+    fn doc(path: &str, suggested: bool) -> DocFile {
+        DocFile {
+            path: path.to_string(),
+            size: 1,
+            suggested,
+        }
+    }
+
+    #[test]
+    fn doc_extensions_decide_which_files_are_docs() {
+        for name in ["a.md", "a.MDX", "a.markdown", "a.rst", "a.adoc"] {
+            assert!(is_doc(name), "{name}");
+        }
+        for name in ["a.py", "a.html", "README", "md", "notes.md.bak"] {
+            assert!(!is_doc(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn txt_is_a_doc_only_with_a_doc_like_name() {
+        for name in ["NOTES.txt", "notes.txt", "README.txt", "LICENSE.txt"] {
+            assert!(is_doc(name), "{name}");
+        }
+        for name in ["requirements.txt", "CMakeLists.txt", "robots.txt"] {
+            assert!(!is_doc(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn docs_list_the_allowed_hidden_folders_only() {
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        write_files(
+            dir.path(),
+            &[
+                ".github/CONTRIBUTING.md",
+                ".github/ISSUE_TEMPLATE/bug.md",
+                ".github/.secret.md",
+                ".github/workflows/ci.py",
+                ".agent-files/spec.md",
+                ".cursor/rules/style.md",
+                ".hidden/a.md",
+                ".ainspector/overview.md",
+                ".venv/lib/a.md",
+                ".github/node_modules/a.md",
+                "node_modules/dep/a.md",
+                "bin/a.md",
+                "ignored.md",
+                ".cursor-old/a.md",
+            ],
+        );
+        fs::write(dir.path().join(".gitignore"), "ignored.md\n").unwrap();
+
+        let paths: Vec<String> = docs_of(dir.path())
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+
+        assert_eq!(
+            paths,
+            vec![
+                ".agent-files/spec.md",
+                ".cursor/rules/style.md",
+                ".github/CONTRIBUTING.md",
+                ".github/ISSUE_TEMPLATE/bug.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_root_gitignore_applies_to_hidden_doc_folders() {
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        write_files(dir.path(), &[".cursor/a.md", ".github/a.md"]);
+        fs::write(dir.path().join(".gitignore"), ".cursor/\n").unwrap();
+
+        assert_eq!(
+            docs_of(dir.path()),
+            vec![(".github/a.md".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn doc_files_do_not_change_the_projects() {
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        write_files(
+            dir.path(),
+            &[
+                "a.py",
+                ".github/scripts/b.py",
+                ".github/package.json",
+                ".cursor/c.ts",
+            ],
+        );
+
+        let repo = scan_repo(dir.path()).unwrap();
+
+        assert_eq!(repo.projects.len(), 1);
+        assert_eq!(repo.projects[0].files, vec!["a.py"]);
+    }
+
+    #[test]
+    fn suggested_docs_are_the_overview_sources() {
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        write_files(
+            dir.path(),
+            &[
+                "web/package.json",
+                "web/a.ts",
+                "README.md",
+                "ARCHITECTURE.md",
+                "CLAUDE.md",
+                "AGENTS.md",
+                "docs/guide.md",
+                "web/README.md",
+                "web/DESIGN.md",
+                ".agent-files/intent.md",
+                ".cursor/rules/style.md",
+                "CHANGELOG.md",
+                "LICENSE.txt",
+                "CODE_OF_CONDUCT.md",
+                "SECURITY.md",
+                "docs/api/routes.md",
+                "web/docs/DESIGN.md",
+                "other/README.md",
+                "other/deep/README.md",
+                "web/CHANGELOG.md",
+                ".github/PULL_REQUEST_TEMPLATE.md",
+                ".github/ISSUE_TEMPLATE/bug.md",
+            ],
+        );
+
+        let (suggested, others): (Vec<_>, Vec<_>) = docs_of(dir.path())
+            .into_iter()
+            .partition(|(_, suggested)| *suggested);
+        let paths =
+            |docs: Vec<(String, bool)>| docs.into_iter().map(|(path, _)| path).collect::<Vec<_>>();
+
+        assert_eq!(
+            paths(suggested),
+            vec![
+                "AGENTS.md",
+                "ARCHITECTURE.md",
+                "CLAUDE.md",
+                "README.md",
+                ".agent-files/intent.md",
+                "docs/guide.md",
+                "web/DESIGN.md",
+                "web/README.md",
+                ".cursor/rules/style.md",
+            ]
+        );
+        assert_eq!(
+            paths(others),
+            vec![
+                "CHANGELOG.md",
+                "CODE_OF_CONDUCT.md",
+                "LICENSE.txt",
+                "SECURITY.md",
+                ".github/PULL_REQUEST_TEMPLATE.md",
+                "other/README.md",
+                "web/CHANGELOG.md",
+                ".github/ISSUE_TEMPLATE/bug.md",
+                "docs/api/routes.md",
+                "other/deep/README.md",
+                "web/docs/DESIGN.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn docs_are_sorted_by_suggested_then_depth_then_path() {
+        let mut docs = vec![
+            doc("z/deep/x.md", false),
+            doc("docs/b.md", false),
+            doc("a/x.md", false),
+            doc("CHANGELOG.md", false),
+            doc("docs/a.md", false),
+            doc("README.md", false),
+            doc("docs/api/x.md", false),
+        ];
+
+        rank_docs(&mut docs, &[]);
+
+        let paths: Vec<&str> = docs.iter().map(|d| d.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "README.md",
+                "docs/a.md",
+                "docs/b.md",
+                "CHANGELOG.md",
+                "a/x.md",
+                "docs/api/x.md",
+                "z/deep/x.md",
+            ]
+        );
+        assert_eq!(docs.iter().filter(|d| d.suggested).count(), 3);
+    }
+
+    #[test]
+    fn doc_size_is_the_file_size_in_bytes() {
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "12345").unwrap();
+
+        assert_eq!(
+            scan_repo(dir.path()).unwrap().docs,
+            vec![DocFile {
+                path: "README.md".to_string(),
+                size: 5,
+                suggested: true,
+            }]
+        );
     }
 
     #[test]

@@ -4,6 +4,8 @@ A desktop app that helps you understand a code repository you did not write. Thi
 
 Open a repository. The app finds its projects, asks an LLM to split a project into logical modules, and lets you read the files of each module.
 
+> **Version:** 0.1.0
+>
 > **Status:** early MVP. The code is written and covered by unit tests. It is not yet verified end to end with a real LLM, and the Linux build is not yet verified.
 
 ## Why
@@ -28,6 +30,8 @@ Repo  →  Project  →  Module  →  File
 - Results are cached in `<repo>/.ainspector/` (git-ignored automatically). The cache key is the git commit, plus a fingerprint of local changes. When the repo changes, the app shows an **Outdated** badge. It does not regenerate on its own.
 
 ### Privacy
+
+Module analysis sends structure only, never source code. The repo overview sends the text of the documentation files that you select. Do not select files that hold secrets or internal URLs. When a repo has no documentation, you can confirm an overview inferred from the structure: file paths, manifest files and module names. No source code is sent.
 
 Any OpenAI-compatible endpoint works. Use a local model (for example Ollama) if your code must not leave your machine. The API key is stored in the OS credential store (Windows Credential Manager, or the Secret Service on Linux). The key is never written to the repo.
 
@@ -81,6 +85,8 @@ For other distributions, see the [Tauri prerequisites](https://tauri.app/start/p
 2. Open a repository folder. The app lists the detected projects.
 3. Select a project, then press **Generate modules**. You can cancel while it runs.
 4. Select a module card, then select a file to read it.
+
+5. Optional: press **Overview**, select the documentation files, then press **Generate**. The app writes `brief.md` and `overview.md` to `<repo>/.ainspector/`. A new run overwrites them.
 
 The breadcrumb at the top (`repo › project › module`) has a dropdown on each level to switch between siblings.
 

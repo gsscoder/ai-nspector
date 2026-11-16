@@ -17,17 +17,17 @@ use crate::store::{self, Module, ModuleFile, ModulesFile};
 
 /// tokens ≈ chars / 4. The model context size is unknown, so this is a fixed budget.
 // ponytail: fixed budget; make it a setting if users hit it.
-const MAX_PROMPT_TOKENS: usize = 100_000;
+pub(crate) const MAX_PROMPT_TOKENS: usize = 100_000;
 
-static CANCEL: AtomicBool = AtomicBool::new(false);
+pub(crate) static CANCEL: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// Allows one generation at a time, so the shared `CANCEL` flag and the cache file belong to one run.
 /// Held until dropped: released on return, early `?` and unwinding alike.
-struct RunGuard;
+pub(crate) struct RunGuard;
 
 impl RunGuard {
-    fn acquire() -> Result<Self, AppError> {
+    pub(crate) fn acquire() -> Result<Self, AppError> {
         RUNNING
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map(|_| Self)
@@ -55,7 +55,7 @@ struct Progress {
     stage: &'static str,
 }
 
-fn progress(app: &AppHandle, stage: &'static str) {
+pub(crate) fn progress(app: &AppHandle, stage: &'static str) {
     let _ = app.emit("modules-progress", Progress { stage });
 }
 
@@ -189,7 +189,7 @@ fn validate(answer: &str, project_files: &[String]) -> Result<Vec<Module>, AppEr
     Ok(modules)
 }
 
-async fn wait_cancel() {
+pub(crate) async fn wait_cancel() {
     // ponytail: polling; use a Notify if 200 ms latency matters.
     while !CANCEL.load(Ordering::SeqCst) {
         tokio::time::sleep(Duration::from_millis(200)).await;

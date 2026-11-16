@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { ModulesFile, Repo } from "@/types";
+import type { ModulesFile, OverviewInfo, Repo } from "@/types";
 
 export const openRepo = (path: string) => invoke<Repo>("open_repo", { path });
 
@@ -16,6 +16,11 @@ export const loadModules = (repoPath: string, projectId: string) =>
 
 export const generateModules = (repoPath: string, projectId: string) =>
   invoke<ModulesFile>("generate_modules", { repoPath, projectId });
+
+export const loadOverview = (repoPath: string) => invoke<OverviewInfo | null>("load_overview", { repoPath });
+
+export const generateOverview = (repoPath: string, files: string[], infer: boolean) =>
+  invoke<OverviewInfo>("generate_overview", { repoPath, files, infer });
 
 export const cancelGeneration = () => invoke<void>("cancel_generation");
 

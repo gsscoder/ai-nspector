@@ -19,6 +19,13 @@
 - Folder the user opens
 - Can contain several independent projects, e.g. 2 separate Python projects
 - Can be multi-project by design, e.g. a .NET solution
+### Repo overview
+- Short and long summary of the repo, made by AI from the repo's own docs (README, docs/, agent files)
+- The user selects the doc files; the app suggests them deterministically, no AI
+- Output: `brief.md` (very short) and `overview.md` (detailed)
+- Purpose: context for later LLM steps (module generation, analysis)
+- Useless sources (conduct rules, PR policies, license) → AI ignores them; only useless sources → generation fails
+- Repo without doc files: the user can confirm an overview inferred from the repo structure (paths, manifests); the result is marked as inferred
 ### Project
 - Detected deterministically from manifest files; no AI
 - Reason: fast, free, same result every run
@@ -46,6 +53,7 @@
 - Actions: view read-only; open in the user's editor
 ## Navigation (minimal)
 - Breadcrumb at top: repo › project › module; each crumb is a dropdown to switch siblings
+- "Overview" button before the repo crumb, visible at every level
 - Project selected: main area shows module cards; name, purpose, file count; later also analysis findings
 - Module selected: single sidebar lists module files; main area shows the selected file
 ## MVP scope
@@ -69,6 +77,8 @@
 - Constraint: data kept by the MVP must not block these features
 ## Risks and constraints
 - Privacy: sending source to a cloud LLM is not acceptable for many users → support a local model and/or a user-supplied API key
+  - Repo overview sends doc text (not source code) to the LLM; the user selects the files
+  - Inferred overview (no docs) sends structure only: file paths, manifest text, module names; never source code
 - Large repos and monorepos: thousands of files → structured AI input required
 - Non-deterministic AI output → cache by commit
 ## Tech decisions

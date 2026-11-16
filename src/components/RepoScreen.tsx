@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, FolderGit2, X } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, FolderGit2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -8,9 +8,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ModuleView from "@/components/ModuleView";
+import OverviewDialog from "@/components/OverviewDialog";
 import ProjectView from "@/components/ProjectView";
 import { STACK, projectLabel } from "@/lib/project";
-import type { ModulesFile, Repo } from "@/types";
+import type { ModulesFile, OverviewInfo, Repo } from "@/types";
 
 function Crumb({
   label,
@@ -41,18 +42,37 @@ function Crumb({
   );
 }
 
-export default function RepoScreen({ repo, onClose }: { repo: Repo; onClose: () => void }) {
+export default function RepoScreen({
+  repo,
+  overview,
+  onOverviewChange,
+  onClose,
+}: {
+  repo: Repo;
+  overview: OverviewInfo | null | undefined;
+  onOverviewChange: (info: OverviewInfo) => void;
+  onClose: () => void;
+}) {
   const [projectId, setProjectId] = useState<string | null>(
     repo.projects.length === 1 ? repo.projects[0].id : null,
   );
   const [moduleId, setModuleId] = useState<string | null>(null);
   const [data, setData] = useState<ModulesFile | null>(null);
+  const [overviewOpen, setOverviewOpen] = useState(false);
   const project = repo.projects.find((p) => p.id === projectId);
   const module = data?.modules.find((m) => m.id === moduleId);
 
   return (
     <div className="flex flex-col gap-6">
       <nav className="-mx-2 flex items-center gap-1 text-sm">
+        <Button variant="ghost" size="sm" onClick={() => setOverviewOpen(true)}>
+          <span className="relative">
+            <BookOpen />
+            {overview && <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary" />}
+          </span>
+          Overview
+        </Button>
+        <span aria-hidden className="mx-1 h-4 w-px bg-border" />
         <Button
           variant="ghost"
           size="sm"
@@ -102,7 +122,6 @@ export default function RepoScreen({ repo, onClose }: { repo: Repo; onClose: () 
         <p className="text-sm text-muted-foreground">No projects found in {repo.root}.</p>
       ) : !project ? (
         <section className="flex flex-col gap-4">
-          <h2 className="text-2xl font-semibold tracking-tight">Projects</h2>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {repo.projects.map((p) => (
               <button
@@ -130,6 +149,17 @@ export default function RepoScreen({ repo, onClose }: { repo: Repo; onClose: () 
           data={data}
           setData={setData}
           onOpenModule={setModuleId}
+        />
+      )}
+      {overviewOpen && (
+        <OverviewDialog
+          repo={repo}
+          overview={overview ?? null}
+          onGenerated={(info) => {
+            onOverviewChange(info);
+            setOverviewOpen(false);
+          }}
+          onClose={() => setOverviewOpen(false)}
         />
       )}
     </div>

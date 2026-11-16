@@ -7,7 +7,7 @@ use crate::error::AppError;
 
 const MAX_BYTES: u64 = 1_000_000;
 
-fn read_repo_file(repo: &Path, rel: &str) -> Result<String, AppError> {
+pub(crate) fn read_repo_file(repo: &Path, rel: &str) -> Result<String, AppError> {
     let rel_path = Path::new(rel);
     // Only plain relative paths: no `..`, no root, no drive prefix.
     if rel_path.is_absolute()
@@ -30,7 +30,7 @@ fn read_repo_file(repo: &Path, rel: &str) -> Result<String, AppError> {
         .map_err(|e| AppError::Io(format!("Cannot open {rel}"), e))?
         .len();
     if size > MAX_BYTES {
-        return Err(AppError::Invalid("file too large".into()));
+        return Err(AppError::Invalid(format!("{rel} is too large")));
     }
     let bytes = fs::read(&full).map_err(|e| AppError::Io(format!("Cannot read {rel}"), e))?;
     String::from_utf8(bytes).map_err(|_| AppError::Invalid(format!("{rel} is not a UTF-8 text file")))
@@ -70,7 +70,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("big.txt"), vec![b'a'; 1_000_001]).unwrap();
         fs::write(dir.path().join("bin.dat"), [0xff, 0xfe, 0x00]).unwrap();
-        assert_eq!(read_repo_file(dir.path(), "big.txt").unwrap_err().to_string(), "file too large");
+        assert_eq!(read_repo_file(dir.path(), "big.txt").unwrap_err().to_string(), "big.txt is too large");
         assert!(read_repo_file(dir.path(), "bin.dat").unwrap_err().to_string().contains("UTF-8"));
     }
 

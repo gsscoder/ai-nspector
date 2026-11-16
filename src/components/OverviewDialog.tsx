@@ -1,0 +1,206 @@
+import { useEffect, useRef, useState } from "react";
+import { Info, Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { cancelGeneration, generateOverview, onModulesProgress } from "@/api";
+import { splitPath } from "@/lib/project";
+import type { DocFile, OverviewInfo, Repo } from "@/types";
+
+// Mirrors MAX_PROMPT_TOKENS in src-tauri/src/modules.rs; the backend enforces it too.
+const MAX_PROMPT_TOKENS = 100_000;
+
+// Mirrors the backend error for documentation files that do not describe the project.
+const INSUFFICIENT_SOURCES_ERROR = "The selected files do not describe the project. Select other files.";
+
+const suggestedPaths = (docs: DocFile[]) => new Set(docs.filter((d) => d.suggested).map((d) => d.path));
+
+export default function OverviewDialog({
+  repo,
+  overview,
+  onGenerated,
+  onClose,
+}: {
+  repo: Repo;
+  overview: OverviewInfo | null;
+  onGenerated: (info: OverviewInfo) => void;
+  onClose: () => void;
+}) {
+  // The parent mounts this dialog on every open, so the selection always starts from the suggested files.
+  const [selected, setSelected] = useState(() => suggestedPaths(repo.docs));
+  const [stage, setStage] = useState<string | null>(null); // non-null while generating
+  const [error, setError] = useState<string | null>(null);
+  const [seconds, setSeconds] = useState(0);
+  const mounted = useRef(false); // a run that outlives this dialog must not touch the parent state
+  const unlisten = useRef<(() => void) | null>(null);
+
+  const generating = stage !== null;
+  useEffect(() => {
+    if (!generating) return;
+    setSeconds(0);
+    const timer = setInterval(() => setSeconds((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [generating]);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      unlisten.current?.();
+    };
+  }, []);
+
+  const files = repo.docs.filter((d) => selected.has(d.path));
+  const tokens = Math.round(files.reduce((sum, d) => sum + d.size, 0) / 4);
+  const overBudget = tokens > MAX_PROMPT_TOKENS;
+
+  function toggle(path: string) {
+    const next = new Set(selected);
+    if (!next.delete(path)) next.add(path);
+    setSelected(next);
+  }
+
+  async function generate(infer: boolean) {
+    setError(null);
+    setStage("Starting");
+    try {
+      unlisten.current = await onModulesProgress((s) => mounted.current && setStage(s));
+      const result = await generateOverview(
+        repo.root,
+        infer ? [] : files.map((d) => d.path),
+        infer,
+      );
+      if (mounted.current) onGenerated(result);
+    } catch (e) {
+      if (mounted.current && String(e) !== "Cancelled") setError(String(e));
+    } finally {
+      unlisten.current?.();
+      unlisten.current = null;
+      if (mounted.current) setStage(null);
+    }
+  }
+
+  const noDocs = repo.docs.length === 0;
+  const progress = (
+    <>
+      <span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+      <span role="status" className="text-sm text-muted-foreground">
+        {stage}… {seconds}s
+      </span>
+    </>
+  );
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !generating && onClose()}>
+      <DialogContent>
+        <div>
+          <DialogTitle>Repository overview</DialogTitle>
+          <DialogDescription>
+            {noDocs
+              ? "No documentation found. The app can infer the overview from the repo structure: file paths and manifest files. No source code is sent. The result can be less accurate."
+              : "Select the documentation files that describe this repo. The LLM writes the overview from them."}
+          </DialogDescription>
+          {overview && (
+            <p className="mt-1 text-xs text-muted-foreground">Generated {new Date(overview.generatedAt).toLocaleDateString()}</p>
+          )}
+        </div>
+        {noDocs ? (
+          <>
+            {error && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
+            <div className="flex items-center gap-2 self-end">
+              {generating && progress}
+              <Button variant="outline" onClick={generating ? cancelGeneration : onClose}>
+                Cancel
+              </Button>
+              {!generating && (
+                <Button onClick={() => generate(true)}>
+                  <Sparkles />
+                  {overview ? "Regenerate" : "Generate"}
+                </Button>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={generating}
+                onClick={() => setSelected(suggestedPaths(repo.docs))}
+              >
+                Select suggested
+              </Button>
+              <Button variant="outline" size="sm" disabled={generating} onClick={() => setSelected(new Set())}>
+                None
+              </Button>
+            </div>
+            <ul className="flex min-h-0 flex-col gap-0.5 overflow-y-auto rounded-lg border p-1">
+              {repo.docs.map((d) => {
+                const { name, dir } = splitPath(d.path);
+                return (
+                  <li key={d.path}>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60">
+                      <input
+                        type="checkbox"
+                        className="accent-primary"
+                        checked={selected.has(d.path)}
+                        disabled={generating}
+                        onChange={() => toggle(d.path)}
+                      />
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs" title={d.path}>
+                        <span className="text-muted-foreground">{dir === "" ? "" : `${dir}/`}</span>
+                        {name}
+                      </span>
+                      <span className="shrink-0 text-xs text-muted-foreground">{Math.ceil(d.size / 1024)} KB</span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Info className="size-3.5 shrink-0" />
+              The text of the selected files is sent to the LLM.
+            </p>
+            {error && (
+              <div className="flex flex-wrap items-center gap-3">
+                <p role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+                {error === INSUFFICIENT_SOURCES_ERROR && (
+                  <Button variant="outline" size="sm" disabled={generating} onClick={() => generate(true)}>
+                    Infer from structure
+                  </Button>
+                )}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                {files.length} {files.length === 1 ? "file" : "files"} · ~{tokens} tokens
+                {overBudget && <span className="text-destructive"> · Too many tokens. Select fewer files.</span>}
+              </p>
+              <div className="flex items-center gap-2">
+                {generating ? (
+                  <>
+                    {progress}
+                    <Button variant="outline" onClick={cancelGeneration}>
+                      Cancel
+                    </Button>
+                  </>
+                ) : (
+                  <Button disabled={files.length === 0 || overBudget} onClick={() => generate(false)}>
+                    <Sparkles />
+                    {overview ? "Regenerate" : "Generate"}
+                  </Button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
