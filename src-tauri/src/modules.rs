@@ -64,7 +64,7 @@ struct Response {
     modules: Vec<Module>,
 }
 
-fn user_prompt(structure: &ProjectStructure, with_symbols: bool) -> String {
+pub(crate) fn user_prompt(structure: &ProjectStructure, with_symbols: bool) -> String {
     let mut text = String::new();
     for file in &structure.files {
         text.push_str(&file.path);
@@ -218,7 +218,7 @@ pub(crate) async fn wait_cancel() {
     }
 }
 
-fn find_project(repo: &Path, project_id: &str) -> Result<Project, AppError> {
+pub(crate) fn find_project(repo: &Path, project_id: &str) -> Result<Project, AppError> {
     scan_repo(repo)?
         .projects
         .into_iter()
@@ -296,6 +296,8 @@ pub async fn generate_modules(
                     outdated: false,
                 };
                 store::save(Path::new(&repo_dir), &project.id, &mut file)?;
+                // Module ids can change, so the old chats could point to the wrong files.
+                store::delete_project_chats(Path::new(&repo_dir), &project.id)?;
                 return Ok(file);
             }
             Err(e) if retried => return Err(e),

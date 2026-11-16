@@ -69,9 +69,9 @@ function App() {
           This repo has no overview yet. Use the Overview button to create brief.md and overview.md.
         </Notice>
       )}
-      <main className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-7xl p-6">
-          <div hidden={showSettings}>
+      <main className="flex flex-1 flex-col overflow-auto p-6">
+        <div className="mx-auto min-h-0 w-full max-w-7xl flex-1">
+          <div className={showSettings ? "hidden" : "h-full"}>
             <RepoView
               repo={repo}
               overview={overview}

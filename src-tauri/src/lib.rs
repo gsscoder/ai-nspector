@@ -1,5 +1,6 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod analysis;
 mod error;
 mod files;
 mod llm;
@@ -24,6 +25,12 @@ pub fn run() -> tauri::Result<()> {
             modules::cancel_generation,
             overview::load_overview,
             overview::generate_overview,
+            analysis::list_analyses,
+            analysis::load_chat,
+            analysis::start_analysis,
+            analysis::send_chat_message,
+            analysis::discard_chat,
+            analysis::create_agent_prompt,
             settings::get_settings,
             settings::save_settings,
             llm::test_connection,

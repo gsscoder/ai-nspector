@@ -19,7 +19,7 @@ use crate::scan::{DocFile, Language, Project, scan_repo};
 use crate::settings::{LlmConfig, load_llm_config};
 use crate::store::{self, Module};
 
-const OVERVIEW_FILE: &str = "overview.md";
+pub(crate) const OVERVIEW_FILE: &str = "overview.md";
 const BRIEF_FILE: &str = "brief.md";
 const INSUFFICIENT_SOURCES: &str = "INSUFFICIENT_SOURCES";
 const NOT_DOCUMENTED: &str = "Not documented.";
@@ -154,7 +154,7 @@ struct ProjectInput<'a> {
 }
 
 /// Removes one code fence around the answer, if present.
-fn unfence(answer: &str) -> &str {
+pub(crate) fn unfence(answer: &str) -> &str {
     let text = answer.trim();
     text.strip_prefix("```")
         .and_then(|rest| rest.strip_suffix("```"))

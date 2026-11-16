@@ -28,7 +28,7 @@ export default function StartScreen({ onOpen }: { onOpen: (repo: Repo) => void }
         <div className="rounded-xl border bg-card p-3">
           <ScanSearch className="size-7 text-primary" />
         </div>
-        <h2 className="text-2xl font-semibold tracking-tight">Understand a codebase you did not write</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">Understand and improve any codebase</h2>
         <p className="text-sm text-muted-foreground">
           Open a repository to see its projects and the logical modules that AI finds in them.
         </p>

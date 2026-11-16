@@ -38,7 +38,7 @@
   - Java: `pom.xml`, `build.gradle`
 ### Module
 - Logical part of a project; produced by AI
-- AI input: structure, not raw source
+- AI input for module generation: structure
   - file tree
   - import graph
   - top-level symbols
@@ -48,6 +48,13 @@
 - Optional stabilization: cluster files deterministically first (imports + folders); AI then names and merges clusters
 - Cache results by git commit hash
   - reason: LLM output is non-deterministic; unstable modules destroy user trust
+### Module analysis
+- AI review of one module; first analysis: over-engineering (review only; no bug fixes, features or architecture opinions)
+- Input: source of the module files + `overview.md` + project structure; sent to the configured LLM
+- Flow: the user runs an analysis from the analysis panel → the findings stream as free text into a chat (first assistant message) → the user discusses them with the AI
+- One chat per module, kept in `<repo>/.ainspector/chats/`; "outdated" badge when the module files change; the user discards it with a confirm
+- "Create Agent Prompt": popup with an editable prompt built from the chat (only the changes the chat kept); the user copies it into a coding agent (Claude Code, Codex)
+- Regenerating the modules of a project deletes its chats; module ids can change
 ### File
 - Source file listed under a module
 - Actions: view read-only; open in the user's editor
@@ -55,7 +62,7 @@
 - Breadcrumb at top: repo › project › module; each crumb is a dropdown to switch siblings
 - "Overview" button before the repo crumb, visible at every level
 - Project selected: main area shows module cards; name, purpose, file count; later also analysis findings
-- Module selected: single sidebar lists module files; main area shows the selected file
+- Module selected: sidebar lists module files; main area shows the selected file; a right panel lists the analyses; the chat panel opens under them
 ## MVP scope
 - Open repo
 - Detect projects
@@ -63,7 +70,7 @@
 - List module files
 - Nothing else
 ## Future (not MVP)
-- Over-engineering detection
+- Over-engineering detection (first version: module analysis)
 - AI-slop detection
 - Suggested updates
 - AI-slop needs measurable signals, e.g.:
@@ -77,8 +84,9 @@
 - Constraint: data kept by the MVP must not block these features
 ## Risks and constraints
 - Privacy: sending source to a cloud LLM is not acceptable for many users → support a local model and/or a user-supplied API key
-  - Repo overview sends doc text (not source code) to the LLM; the user selects the files
-  - Inferred overview (no docs) sends structure only: file paths, manifest text, module names; never source code
+  - Repo overview sends doc text to the LLM; the user selects the files
+  - Inferred overview (no docs) sends file paths, manifest text and module names
+  - Module analysis sends the source of the module files, `overview.md` and the project structure to the LLM; no consent dialog, the base URL is the user's choice
 - Large repos and monorepos: thousands of files → structured AI input required
 - Non-deterministic AI output → cache by commit
 ## Tech decisions

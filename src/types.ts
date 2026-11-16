@@ -53,3 +53,24 @@ export interface ModulesFile {
 export interface OverviewInfo {
   generatedAt: string;
 }
+
+// Mirror the structs in src-tauri/src/analysis.rs. createdAt is RFC 3339.
+export interface AnalysisInfo {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatFile {
+  analysis: string;
+  moduleName: string;
+  model: string;
+  createdAt: string;
+  messages: ChatMessage[];
+  outdated: boolean;
+}

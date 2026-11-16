@@ -63,7 +63,7 @@ export default function RepoScreen({
   const module = data?.modules.find((m) => m.id === moduleId);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex h-full flex-col gap-6">
       <nav className="-mx-2 flex items-center gap-1 text-sm">
         <Button variant="ghost" size="sm" onClick={() => setOverviewOpen(true)}>
           <span className="relative">
@@ -140,7 +140,7 @@ export default function RepoScreen({
           </div>
         </section>
       ) : module ? (
-        <ModuleView key={module.id} repoRoot={repo.root} module={module} />
+        <ModuleView key={module.id} repoRoot={repo.root} projectId={project.id} module={module} overview={overview} />
       ) : (
         <ProjectView
           key={project.id}

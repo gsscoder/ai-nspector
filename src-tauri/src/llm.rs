@@ -3,17 +3,41 @@
 use std::error::Error;
 use std::time::{Duration, Instant};
 
-use reqwest::{Client, Url};
-use serde::Deserialize;
+use reqwest::{Client, Response, Url};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::error::AppError;
 use crate::settings::{LlmConfig, Provider, load_llm_config};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-// ponytail: whole-answer limit because the request is not streamed; stream the answer if 10 minutes is not enough
+// ponytail: total limit per request, streamed answers included; use a read timeout if 10 minutes is not enough
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 const ERROR_BODY_MAX_CHARS: usize = 300;
+const DONE_MARKER: &str = "[DONE]";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    System,
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: Role,
+    pub content: String,
+}
+
+impl ChatMessage {
+    pub fn new(role: Role, content: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: content.into(),
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct ChatResponse {
@@ -29,6 +53,30 @@ struct Choice {
 #[derive(Deserialize)]
 struct Message {
     content: Option<String>,
+}
+
+/// One `data:` event of a streamed answer.
+#[derive(Deserialize)]
+struct StreamChunk {
+    choices: Vec<StreamChoice>,
+}
+
+#[derive(Deserialize)]
+struct StreamChoice {
+    delta: Delta,
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Delta {
+    content: Option<String>,
+}
+
+enum StreamEvent {
+    Text(String),
+    Done,
+    /// Comment, blank line, role-only chunk, or a chunk without choices (Azure sends one first).
+    Skip,
 }
 
 /// Azure takes only scheme, host and port of the base URL, so the plain resource URL and the
@@ -51,13 +99,10 @@ fn endpoint_url(provider: Provider, base_url: &str) -> Result<String, AppError> 
     }
 }
 
-fn request_body(model: &str, system: &str, user: &str, json_mode: bool) -> Value {
+fn request_body(model: &str, messages: &[ChatMessage], json_mode: bool) -> Value {
     let mut body = json!({
         "model": model,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user },
-        ],
+        "messages": messages,
         "stream": false,
     });
     if json_mode {
@@ -80,6 +125,21 @@ fn describe_network_error(error: &reqwest::Error) -> String {
     text
 }
 
+fn network_error(error: reqwest::Error) -> AppError {
+    AppError::Llm(describe_network_error(&error))
+}
+
+/// A retry with the same prompt would be cut off at the same place.
+fn cut_off_error() -> AppError {
+    AppError::Llm(
+        "The model output was cut off because it reached the output limit. Use a model with a larger output limit or a smaller project.".into(),
+    )
+}
+
+fn empty_answer_error() -> AppError {
+    AppError::Llm("The LLM server returned an empty answer.".into())
+}
+
 fn extract_content(body: &str) -> Result<String, AppError> {
     let response: ChatResponse = serde_json::from_str(body).map_err(|e| {
         AppError::Json("Unexpected response from the LLM server (no chat completion)".into(), e)
@@ -89,17 +149,83 @@ fn extract_content(body: &str) -> Result<String, AppError> {
         .into_iter()
         .next()
         .ok_or_else(|| AppError::Llm("The LLM server returned no choices.".into()))?;
-    // A retry with the same prompt would be cut off at the same place.
     if choice.finish_reason.as_deref() == Some("length") {
-        return Err(AppError::Llm(
-            "The model output was cut off because it reached the output limit. Use a model with a larger output limit or a smaller project.".into(),
-        ));
+        return Err(cut_off_error());
     }
     let content = choice.message.content.unwrap_or_default();
     if content.trim().is_empty() {
-        return Err(AppError::Llm("The LLM server returned an empty answer.".into()));
+        return Err(empty_answer_error());
     }
     Ok(content)
+}
+
+/// Decodes one line of a server-sent-events stream. A `length` finish reason is an error.
+fn parse_stream_line(line: &str) -> Result<StreamEvent, AppError> {
+    let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+        return Ok(StreamEvent::Skip);
+    };
+    if data == DONE_MARKER {
+        return Ok(StreamEvent::Done);
+    }
+    let chunk: StreamChunk = serde_json::from_str(data).map_err(|e| {
+        AppError::Json("Unexpected response from the LLM server (no chat completion chunk)".into(), e)
+    })?;
+    let Some(choice) = chunk.choices.into_iter().next() else {
+        return Ok(StreamEvent::Skip);
+    };
+    if choice.finish_reason.as_deref() == Some("length") {
+        return Err(cut_off_error());
+    }
+    Ok(match choice.delta.content {
+        Some(text) if !text.is_empty() => StreamEvent::Text(text),
+        _ => StreamEvent::Skip,
+    })
+}
+
+/// Collects bytes and hands out complete lines. A UTF-8 character can span two network chunks,
+/// so bytes are decoded only after the whole line has arrived.
+#[derive(Default)]
+struct LineBuffer(Vec<u8>);
+
+impl LineBuffer {
+    fn push(&mut self, bytes: &[u8]) {
+        self.0.extend_from_slice(bytes);
+    }
+
+    /// The next complete line without its line break.
+    fn next_line(&mut self) -> Option<String> {
+        let end = self.0.iter().position(|&byte| byte == b'\n')?;
+        let line: Vec<u8> = self.0.drain(..=end).collect();
+        Some(String::from_utf8_lossy(&line[..end]).trim_end_matches('\r').to_string())
+    }
+}
+
+/// Posts `body` to the chat completions endpoint. A non-success status is an error that
+/// carries the start of the server answer.
+async fn post(cfg: &LlmConfig, body: &Value) -> Result<Response, AppError> {
+    let client = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| AppError::Llm(format!("Cannot create the HTTP client: {e}")))?;
+
+    let request = client
+        .post(endpoint_url(cfg.provider, &cfg.base_url)?)
+        .json(body);
+    let request = match cfg.provider {
+        Provider::Azure => request.header("api-key", &cfg.api_key),
+        Provider::Openai if !cfg.api_key.is_empty() => request.bearer_auth(&cfg.api_key),
+        Provider::Openai => request,
+    };
+
+    let response = request.send().await.map_err(network_error)?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let body = response.text().await.map_err(network_error)?;
+    let excerpt: String = body.trim().chars().take(ERROR_BODY_MAX_CHARS).collect();
+    Err(AppError::Llm(format!("The LLM server answered HTTP {status}: {excerpt}")))
 }
 
 /// Sends one chat completion request and returns the text of the first choice.
@@ -110,35 +236,55 @@ pub async fn complete(
     user: &str,
     json_mode: bool,
 ) -> Result<String, AppError> {
-    let client = Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|e| AppError::Llm(format!("Cannot create the HTTP client: {e}")))?;
-
-    let request = client
-        .post(endpoint_url(cfg.provider, &cfg.base_url)?)
-        .json(&request_body(&cfg.model, system, user, json_mode));
-    let request = match cfg.provider {
-        Provider::Azure => request.header("api-key", &cfg.api_key),
-        Provider::Openai if !cfg.api_key.is_empty() => request.bearer_auth(&cfg.api_key),
-        Provider::Openai => request,
-    };
-
-    let response = request
-        .send()
-        .await
-        .map_err(|e| AppError::Llm(describe_network_error(&e)))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| AppError::Llm(describe_network_error(&e)))?;
-    if !status.is_success() {
-        let excerpt: String = body.trim().chars().take(ERROR_BODY_MAX_CHARS).collect();
-        return Err(AppError::Llm(format!("The LLM server answered HTTP {status}: {excerpt}")));
-    }
+    let messages = [
+        ChatMessage::new(Role::System, system),
+        ChatMessage::new(Role::User, user),
+    ];
+    let response = post(cfg, &request_body(&cfg.model, &messages, json_mode)).await?;
+    let body = response.text().await.map_err(network_error)?;
     extract_content(&body)
+}
+
+/// Sends the conversation as a streamed request. `on_delta` gets each piece of text as it
+/// arrives; the result is the whole answer.
+/// Cancel-safe: nothing is spawned, so dropping the future drops the request.
+pub async fn stream(
+    cfg: &LlmConfig,
+    messages: &[ChatMessage],
+    mut on_delta: impl FnMut(&str),
+) -> Result<String, AppError> {
+    let mut body = request_body(&cfg.model, messages, false);
+    body["stream"] = json!(true);
+    let mut response = post(cfg, &body).await?;
+
+    let mut lines = LineBuffer::default();
+    let mut answer = String::new();
+    loop {
+        let chunk = response.chunk().await.map_err(network_error)?;
+        let ended = chunk.is_none();
+        // At the end, a line break closes a last line that has none.
+        lines.push(chunk.as_deref().unwrap_or(b"\n"));
+        while let Some(line) = lines.next_line() {
+            match parse_stream_line(&line)? {
+                StreamEvent::Text(text) => {
+                    on_delta(&text);
+                    answer.push_str(&text);
+                }
+                StreamEvent::Done => return finish_stream(answer),
+                StreamEvent::Skip => {}
+            }
+        }
+        if ended {
+            return finish_stream(answer);
+        }
+    }
+}
+
+fn finish_stream(answer: String) -> Result<String, AppError> {
+    if answer.trim().is_empty() {
+        return Err(empty_answer_error());
+    }
+    Ok(answer)
 }
 
 #[tauri::command]
@@ -179,6 +325,31 @@ mod tests {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_request(&mut socket).await;
             socket.write_all(reply.as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+            request
+        });
+        (base_url, server)
+    }
+
+    /// Serves a 200 answer in HTTP chunked encoding: each entry of `pieces` is one network chunk.
+    /// Returns the base URL and the raw request that arrived.
+    async fn serve_pieces(pieces: Vec<Vec<u8>>) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            for piece in pieces {
+                socket.write_all(format!("{:x}\r\n", piece.len()).as_bytes()).await.unwrap();
+                socket.write_all(&piece).await.unwrap();
+                socket.write_all(b"\r\n").await.unwrap();
+                socket.flush().await.unwrap();
+            }
+            socket.write_all(b"0\r\n\r\n").await.unwrap();
             socket.shutdown().await.unwrap();
             request
         });
@@ -355,5 +526,165 @@ mod tests {
         drop(listener);
         let error = complete(&config(&base_url, ""), "s", "u", false).await.unwrap_err().to_string();
         assert!(error.starts_with("Network error"), "{error}");
+    }
+
+    fn event(content: &str) -> Vec<u8> {
+        format!("data: {}\n\n", json!({ "choices": [{ "delta": { "content": content } }] })).into_bytes()
+    }
+
+    fn conversation() -> Vec<ChatMessage> {
+        vec![
+            ChatMessage::new(Role::System, "be brief"),
+            ChatMessage::new(Role::User, "say hi"),
+            ChatMessage::new(Role::Assistant, "hi"),
+            ChatMessage::new(Role::User, "again"),
+        ]
+    }
+
+    /// Runs `stream` against a server that sends `pieces`. Returns the result, the deltas
+    /// and the raw request.
+    async fn stream_call(pieces: Vec<Vec<u8>>) -> (Result<String, AppError>, Vec<String>, String) {
+        let (base_url, server) = serve_pieces(pieces).await;
+        let mut deltas = Vec::new();
+        let result = stream(&config(&base_url, "k"), &conversation(), |d| deltas.push(d.to_string())).await;
+        (result, deltas, server.await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn stream_delivers_deltas_in_order_and_returns_the_full_text() {
+        let role_only = b"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n".to_vec();
+        let no_choices = b"data: {\"choices\":[]}\n\n".to_vec();
+        let two_events = [event("lo "), event("wor")].concat();
+        let (result, deltas, _) = stream_call(vec![
+            no_choices,
+            role_only,
+            event("hel"),
+            two_events,
+            event("ld"),
+            b"data: [DONE]\n\n".to_vec(),
+        ])
+        .await;
+        assert_eq!(result.unwrap(), "hello world");
+        assert_eq!(deltas, ["hel", "lo ", "wor", "ld"]);
+    }
+
+    #[tokio::test]
+    async fn stream_request_has_stream_true_and_all_messages_in_order() {
+        let (_, _, request) = stream_call(vec![event("hi")]).await;
+        assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"), "{request}");
+        assert_eq!(
+            json_body(&request),
+            json!({
+                "model": "test-model",
+                "messages": [
+                    { "role": "system", "content": "be brief" },
+                    { "role": "user", "content": "say hi" },
+                    { "role": "assistant", "content": "hi" },
+                    { "role": "user", "content": "again" },
+                ],
+                "stream": true,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_joins_a_line_and_a_character_split_across_chunks() {
+        let line = event("h\u{e9}llo");
+        // Split inside the two bytes of "é" and inside the JSON text.
+        let cut = line.iter().position(|&b| b == 0xC3).unwrap() + 1;
+        let (result, deltas, _) = stream_call(vec![line[..cut].to_vec(), line[cut..].to_vec()]).await;
+        assert_eq!(result.unwrap(), "h\u{e9}llo");
+        assert_eq!(deltas, ["h\u{e9}llo"]);
+    }
+
+    #[tokio::test]
+    async fn stream_ignores_everything_after_done() {
+        let (result, deltas, _) =
+            stream_call(vec![event("a"), b"data: [DONE]\n\n".to_vec(), event("late")]).await;
+        assert_eq!(result.unwrap(), "a");
+        assert_eq!(deltas, ["a"]);
+    }
+
+    #[tokio::test]
+    async fn stream_accepts_an_end_without_done_and_without_a_final_line_break() {
+        let last = br#"data: {"choices":[{"delta":{"content":"b"}}]}"#.to_vec();
+        let (result, _, _) = stream_call(vec![event("a"), last]).await;
+        assert_eq!(result.unwrap(), "ab");
+    }
+
+    #[tokio::test]
+    async fn stream_cut_off_by_the_output_limit_is_an_error() {
+        let cut = b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n".to_vec();
+        let (result, _, _) = stream_call(vec![event("partial"), cut]).await;
+        assert!(result.unwrap_err().to_string().contains("cut off"));
+    }
+
+    #[tokio::test]
+    async fn stream_without_text_is_an_empty_answer_error() {
+        let (result, _, _) = stream_call(vec![b"data: [DONE]\n\n".to_vec()]).await;
+        assert!(result.unwrap_err().to_string().contains("empty answer"));
+        let (result, _, _) = stream_call(vec![event("  \n")]).await;
+        assert!(result.unwrap_err().to_string().contains("empty answer"));
+    }
+
+    #[tokio::test]
+    async fn stream_with_malformed_json_is_a_shape_error() {
+        let (result, _, _) = stream_call(vec![b"data: <html>\n\n".to_vec()]).await;
+        assert!(result.unwrap_err().to_string().contains("Unexpected response"));
+    }
+
+    #[tokio::test]
+    async fn stream_reports_a_non_success_status_like_complete() {
+        let (base_url, server) = serve_once("401 Unauthorized", &"x".repeat(500)).await;
+        let result = stream(&config(&base_url, "k"), &conversation(), |_| {}).await;
+        server.await.unwrap();
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("HTTP 401 Unauthorized"), "{error}");
+        assert_eq!(error.matches('x').count(), 300);
+    }
+
+    #[tokio::test]
+    async fn stream_azure_sends_api_key_header_and_no_authorization_header() {
+        let (base_url, server) = serve_pieces(vec![event("ok")]).await;
+        let cfg = LlmConfig {
+            provider: Provider::Azure,
+            ..config(&format!("{base_url}/openai/deployments/dep"), "secret")
+        };
+        let result = stream(&cfg, &conversation(), |_| {}).await;
+        let request = server.await.unwrap();
+        assert_eq!(result.unwrap(), "ok");
+        assert!(request.starts_with("POST /openai/v1/chat/completions HTTP/1.1"), "{request}");
+        assert!(request.to_lowercase().contains("api-key: secret\r\n"), "{request}");
+        assert!(!request.to_lowercase().contains("authorization"), "{request}");
+    }
+
+    #[test]
+    fn line_buffer_hands_out_only_complete_lines_and_trims_carriage_returns() {
+        let mut lines = LineBuffer::default();
+        lines.push(b"data: a\r\ndata: ");
+        assert_eq!(lines.next_line().as_deref(), Some("data: a"));
+        assert_eq!(lines.next_line(), None);
+        lines.push(b"b\n\n");
+        assert_eq!(lines.next_line().as_deref(), Some("data: b"));
+        assert_eq!(lines.next_line().as_deref(), Some(""));
+        assert_eq!(lines.next_line(), None);
+    }
+
+    #[test]
+    fn line_buffer_decodes_a_character_split_across_pushes() {
+        let bytes = "\u{e9}\n".as_bytes();
+        let mut lines = LineBuffer::default();
+        lines.push(&bytes[..1]);
+        assert_eq!(lines.next_line(), None);
+        lines.push(&bytes[1..]);
+        assert_eq!(lines.next_line().as_deref(), Some("\u{e9}"));
+    }
+
+    #[test]
+    fn chat_roles_are_lowercase_in_json() {
+        let message = ChatMessage::new(Role::Assistant, "x");
+        assert_eq!(serde_json::to_value(&message).unwrap(), json!({ "role": "assistant", "content": "x" }));
+        let parsed: ChatMessage = serde_json::from_value(json!({ "role": "user", "content": "y" })).unwrap();
+        assert_eq!(parsed, ChatMessage::new(Role::User, "y"));
     }
 }
