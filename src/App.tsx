@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ArrowLeft, ScanSearch, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import RepoView from "@/components/RepoView";
 import Settings from "@/components/Settings";
@@ -8,17 +9,23 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex items-center justify-between border-b px-4 py-2">
-        <h1 className="text-lg font-semibold">ai-nspector</h1>
-        <Button variant="outline" onClick={() => setShowSettings(!showSettings)}>
+      <header className="flex h-12 shrink-0 items-center justify-between border-b bg-card/40 px-4">
+        <h1 className="flex items-center gap-2 font-semibold tracking-tight">
+          <ScanSearch className="size-5 text-primary" />
+          ai-nspector
+        </h1>
+        <Button variant="ghost" size="sm" onClick={() => setShowSettings(!showSettings)}>
+          {showSettings ? <ArrowLeft /> : <Settings2 />}
           {showSettings ? "Back" : "Settings"}
         </Button>
       </header>
-      <main className="flex-1 overflow-auto p-4">
-        <div hidden={showSettings}>
-          <RepoView />
+      <main className="flex-1 overflow-auto">
+        <div className="mx-auto max-w-7xl p-6">
+          <div hidden={showSettings}>
+            <RepoView />
+          </div>
+          {showSettings && <Settings />}
         </div>
-        {showSettings && <Settings />}
       </main>
     </div>
   );

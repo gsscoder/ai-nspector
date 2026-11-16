@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Boxes, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cancelGeneration, generateModules, loadModules, onModulesProgress } from "@/api";
 import { projectLabel } from "@/lib/project";
@@ -72,31 +73,37 @@ export default function ProjectView({
 
   return (
     <section className="flex flex-col gap-4">
-      <div>
-        <h2 className="text-xl font-semibold">{projectLabel(project)}</h2>
-        <p className="text-sm text-muted-foreground">
-          {project.files.length} {project.files.length === 1 ? "file" : "files"}
-        </p>
-      </div>
-      <div className="flex items-center gap-2">
-        {generating ? (
-          <>
-            <span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            <span role="status" className="text-sm text-muted-foreground">
-              {stage}… {seconds}s
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold tracking-tight">{projectLabel(project)}</h2>
+          <p className="text-sm text-muted-foreground">
+            {project.files.length} {project.files.length === 1 ? "file" : "files"}
+            {data && ` · ${data.modules.length} ${data.modules.length === 1 ? "module" : "modules"}`}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {data?.outdated && !generating && (
+            <span className="rounded-md bg-amber-500/15 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-300">
+              Outdated: the repo changed since {new Date(data.generatedAt).toLocaleString()}
             </span>
-            <Button variant="outline" onClick={cancelGeneration}>
-              Cancel
+          )}
+          {generating ? (
+            <>
+              <span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              <span role="status" className="text-sm text-muted-foreground">
+                {stage}… {seconds}s
+              </span>
+              <Button variant="outline" onClick={cancelGeneration}>
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <Button variant={data ? "outline" : "default"} onClick={generate}>
+              <Sparkles />
+              {data ? "Regenerate" : "Generate modules"}
             </Button>
-          </>
-        ) : (
-          <Button onClick={generate}>{data ? "Regenerate" : "Generate modules"}</Button>
-        )}
-        {data?.outdated && !generating && (
-          <span className="rounded bg-amber-500/20 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-300">
-            Outdated: the repo changed since {new Date(data.generatedAt).toLocaleString()}
-          </span>
-        )}
+          )}
+        </div>
       </div>
       {error && (
         <p role="alert" className="text-sm text-destructive">
@@ -104,17 +111,23 @@ export default function ProjectView({
           {LLM_CONNECTION_ERROR.test(error) && " (LLM settings are under Settings.)"}
         </p>
       )}
+      {!data && !generating && !error && (
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed p-10 text-center">
+          <Boxes className="size-8 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">No modules yet. Generate them to see how this project is organized.</p>
+        </div>
+      )}
       {data && (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {data.modules.map((m) => (
             <button
               key={m.id}
-              className="rounded-lg border p-4 text-left hover:bg-muted"
+              className="flex flex-col rounded-xl border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-muted/40"
               onClick={() => onOpenModule(m.id)}
             >
               <div className="font-medium">{m.name}</div>
-              <div className="text-sm text-muted-foreground">{m.purpose}</div>
-              <div className="mt-2 text-xs text-muted-foreground">
+              <div className="mt-1 text-sm text-muted-foreground">{m.purpose}</div>
+              <div className="mt-auto pt-3 text-xs text-muted-foreground">
                 {m.files.length} {m.files.length === 1 ? "file" : "files"}
               </div>
             </button>

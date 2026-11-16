@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChevronRight, FolderGit2, FolderOpen, ScanSearch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { listRecentRepos, openRepo, pickFolder } from "@/api";
 import type { Repo } from "@/types";
@@ -22,24 +23,37 @@ export default function StartScreen({ onOpen }: { onOpen: (repo: Repo) => void }
   }
 
   return (
-    <div className="flex max-w-xl flex-col gap-4">
-      <div>
-        <Button onClick={() => open(pickFolder)}>Open folder</Button>
+    <div className="mx-auto flex max-w-xl flex-col gap-8 pt-12">
+      <div className="flex flex-col items-center gap-3 text-center">
+        <div className="rounded-xl border bg-card p-3">
+          <ScanSearch className="size-7 text-primary" />
+        </div>
+        <h2 className="text-2xl font-semibold tracking-tight">Understand a codebase you did not write</h2>
+        <p className="text-sm text-muted-foreground">
+          Open a repository to see its projects and the logical modules that AI finds in them.
+        </p>
+        <Button size="lg" className="mt-2 px-4" onClick={() => open(pickFolder)}>
+          <FolderOpen />
+          Open folder
+        </Button>
       </div>
-      <hr className="border-border" />
       {error && <p className="text-sm text-destructive">{error}</p>}
       {recent.length > 0 && (
         <section>
-          <h2 className="mb-3 text-sm font-medium text-muted-foreground">Recent repos</h2>
-          <ul className="flex flex-col gap-2">
+          <h3 className="mb-2 text-xs font-medium tracking-wider text-muted-foreground uppercase">Recent</h3>
+          <ul className="divide-y overflow-hidden rounded-xl border bg-card">
             {recent.map((path) => (
               <li key={path}>
                 <button
-                  className="w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted"
+                  className="group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/60"
                   onClick={() => open(async () => path)}
                 >
-                  <div className="truncate font-medium">{path.split(/[\\/]/).filter(Boolean).pop() ?? path}</div>
-                  <div className="truncate text-xs text-muted-foreground">{path}</div>
+                  <FolderGit2 className="size-4 shrink-0 text-muted-foreground group-hover:text-primary" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{path.split(/[\\/]/).filter(Boolean).pop() ?? path}</div>
+                    <div className="truncate text-xs text-muted-foreground">{path}</div>
+                  </div>
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                 </button>
               </li>
             ))}

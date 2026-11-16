@@ -41,7 +41,7 @@ export default function CodeView({ repoPath, path }: { repoPath: string; path: s
   if ("error" in state) return <p className="text-sm text-destructive">{state.error}</p>;
   return (
     <div
-      className="overflow-auto rounded-md border text-sm [&_pre]:p-4"
+      className="overflow-auto rounded-xl border text-[13px] leading-relaxed [&_pre]:bg-card! [&_pre]:p-4"
       dangerouslySetInnerHTML={{ __html: state.html }} // Shiki output: source text is escaped
     />
   );

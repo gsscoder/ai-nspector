@@ -111,9 +111,12 @@ export default function Settings() {
         void onSave();
       }}
     >
-      <p className="text-sm text-muted-foreground">
-        Works with any OpenAI-compatible API: OpenAI, OpenRouter, Azure, Ollama, LM Studio.
-      </p>
+      <div>
+        <h2 className="text-2xl font-semibold tracking-tight">LLM settings</h2>
+        <p className="text-sm text-muted-foreground">
+          Works with any OpenAI-compatible API: OpenAI, OpenRouter, Azure, Ollama, LM Studio.
+        </p>
+      </div>
 
       <Field label="Base URL">
         <input
