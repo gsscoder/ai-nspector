@@ -933,8 +933,8 @@ mod tests {
         write_files(
             dir.path(),
             &[
-                ("package.json", "{\"name\":\"shop\"}"),
-                ("src/app.ts", "const api_key_in_source = 1;"),
+                ("shop/package.json", "{\"name\":\"shop\"}"),
+                ("shop/src/app.ts", "const api_key_in_source = 1;"),
                 ("loose.py", "password_in_source = 2"),
             ],
         );
@@ -942,7 +942,7 @@ mod tests {
         let shop = scanned
             .projects
             .iter()
-            .find(|p| p.id == "package.json")
+            .find(|p| p.id == "shop/package.json")
             .unwrap();
         store::save(
             dir.path(),
@@ -961,7 +961,7 @@ mod tests {
         let prompt = build_inferred_prompt(dir.path()).unwrap();
 
         assert!(
-            prompt.contains("<<<MANIFEST package.json>>>\n{\"name\":\"shop\"}\n<<<END MANIFEST>>>"),
+            prompt.contains("<<<MANIFEST shop/package.json>>>\n{\"name\":\"shop\"}\n<<<END MANIFEST>>>"),
             "{prompt}"
         );
         assert!(prompt.contains("- Billing: Invoices and tax\n"), "{prompt}");

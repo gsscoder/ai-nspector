@@ -455,21 +455,28 @@ fn group_into_projects(manifests: Vec<Manifest>, mut sources: Vec<SourceFile>) -
     projects
 }
 
-/// Index in the manifest list of the manifest that owns `source`.
+/// Index in the manifest list of the manifest that owns `source`: the nearest of the same
+/// language; without one, the nearest of any language (for example the JS files of a Python web app).
 fn nearest_manifest(
     by_location: &BTreeMap<(&str, Language), (usize, &Manifest)>,
     source: &SourceFile,
 ) -> Option<usize> {
-    let mut dir = parent_dir(&source.path);
-    loop {
-        if let Some((index, _)) = by_location.get(&(dir, source.language)) {
-            return Some(*index);
-        }
-        if dir.is_empty() {
-            return None;
-        }
-        dir = parent_dir(dir);
-    }
+    let dirs = || {
+        std::iter::successors(Some(parent_dir(&source.path)), |dir| {
+            (!dir.is_empty()).then(|| parent_dir(dir))
+        })
+    };
+    dirs()
+        .find_map(|dir| by_location.get(&(dir, source.language)))
+        .or_else(|| {
+            dirs().find_map(|dir| {
+                by_location
+                    .range((dir, Language::Python)..=(dir, Language::Other))
+                    .next()
+                    .map(|(_, found)| found)
+            })
+        })
+        .map(|(index, _)| *index)
 }
 
 fn read_recent_repos(file: &Path) -> Result<Vec<String>, AppError> {
@@ -725,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_fixture_uses_nearest_manifest_of_the_same_language() {
+    fn mixed_fixture_uses_nearest_manifest_of_the_same_language_else_nearest_of_any() {
         assert_eq!(
             fixture("mixed").projects,
             vec![
@@ -736,6 +743,7 @@ mod tests {
                     "",
                     &[
                         "lib/util.py",
+                        "loose.ts",
                         "scripts/tool.py",
                         "service/scripts/helper.py",
                         "web/tools/gen.py"
@@ -761,13 +769,6 @@ mod tests {
                     Language::Typescript,
                     "web/server",
                     &["web/server/index.js"],
-                ),
-                project(
-                    OTHER_PROJECT_ID,
-                    OTHER_PROJECT_NAME,
-                    Language::Other,
-                    "",
-                    &["loose.ts"],
                 ),
             ]
         );

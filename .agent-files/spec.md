@@ -15,7 +15,7 @@
 - Parser: tree-sitter Rust crates, one grammar per language
 - Project detection: manifest files, no AI (list in `intent.md`)
   - .NET: each `.csproj` is a project; `.sln` files are ignored
-  - Nesting: a file belongs to the nearest manifest above it
+  - Nesting: a file belongs to the nearest manifest above it of its own language; without one, to the nearest manifest of any language (for example the JS files of a Python web app)
   - Workspace root (e.g. `package.json` with `workspaces`) with no own source files is not a project
   - Source files under no manifest: one extra project named "(other files)"
 - Import graph per language:
