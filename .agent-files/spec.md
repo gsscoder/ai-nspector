@@ -26,7 +26,10 @@
 ## LLM
 - One client: OpenAI-compatible Chat Completions API
 - Settings: base URL, model name, API key
-- Works with OpenAI, OpenRouter (Claude), Azure OpenAI, Ollama, LM Studio; local models solve the privacy risk
+- Works with OpenAI, OpenRouter (Claude), Ollama, LM Studio; local models solve the privacy risk
+- Provider setting: `openai` (default) or `azure` (Azure Foundry)
+  - `azure`: Azure v1 API; URL = scheme + host of the base URL + `/openai/v1/chat/completions` (a pasted full Target URI also works); header `api-key` instead of `Authorization: Bearer`; the model field is the deployment name; API key required
+  - No Entra ID login in the MVP
 - API key: OS credential store via `keyring` crate (Windows Credential Manager, Linux Secret Service)
 - Module generation: AI only, input is structure (file tree + imports + top-level symbols); no deterministic clustering in the MVP
 - Repo overview: input is the text of doc files the user selects; never source code

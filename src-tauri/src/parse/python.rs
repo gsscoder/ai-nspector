@@ -61,7 +61,11 @@ fn from_import(node: Node, source: &str) -> Option<Import> {
         .children_by_field_name("name", &mut cursor)
         .map(|name| module_name(name, source))
         .collect();
-    Some(Import::From { level, module, names })
+    Some(Import::From {
+        level,
+        module,
+        names,
+    })
 }
 
 /// Dotted path of a `dotted_name`, or of the module inside `x as y`.
@@ -125,10 +129,18 @@ impl<'files> Resolver<'files> {
         for import in imports {
             match import {
                 Import::Module(module) => targets.extend(self.absolute_module(file, module)),
-                Import::From { level: 0, module, names } => {
+                Import::From {
+                    level: 0,
+                    module,
+                    names,
+                } => {
                     targets.extend(self.absolute_from(file, module, names));
                 }
-                Import::From { level, module, names } => {
+                Import::From {
+                    level,
+                    module,
+                    names,
+                } => {
                     targets.extend(self.relative_from(file, *level, module, names));
                 }
             }
@@ -150,7 +162,13 @@ impl<'files> Resolver<'files> {
             .unwrap_or_default()
     }
 
-    fn relative_from(&self, file: &str, level: usize, module: &str, names: &[String]) -> Vec<String> {
+    fn relative_from(
+        &self,
+        file: &str,
+        level: usize,
+        module: &str,
+        names: &[String],
+    ) -> Vec<String> {
         let mut dir = parent_dir(file);
         for _ in 1..level {
             if dir.is_empty() {
@@ -167,7 +185,11 @@ impl<'files> Resolver<'files> {
         let module_dir = module_dir.trim_end_matches('/');
         self.module_file(root, module)
             .into_iter()
-            .chain(names.iter().filter_map(|name| self.module_file(module_dir, name)))
+            .chain(
+                names
+                    .iter()
+                    .filter_map(|name| self.module_file(module_dir, name)),
+            )
             .collect()
     }
 

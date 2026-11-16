@@ -17,10 +17,20 @@ const KEY_USER: &str = "llm-api-key";
 const NO_STORE_HINT: &str = "No OS credential store available. On Linux, start a Secret Service provider \
 (for example GNOME Keyring or KWallet). The API key is never saved as plain text";
 
+/// How the client talks to the server: plain OpenAI-compatible, or Azure Foundry.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    #[default]
+    Openai,
+    Azure,
+}
+
 /// What the user edits in the Settings screen. Empty strings mean "not set".
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LlmSettings {
+    pub provider: Provider,
     pub base_url: String,
     pub model: String,
 }
@@ -28,6 +38,7 @@ pub struct LlmSettings {
 impl LlmSettings {
     fn normalized(self) -> Self {
         Self {
+            provider: self.provider,
             base_url: self.base_url.trim().trim_end_matches('/').to_string(),
             model: self.model.trim().to_string(),
         }
@@ -37,6 +48,7 @@ impl LlmSettings {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsView {
+    provider: Provider,
     base_url: String,
     model: String,
     has_api_key: bool,
@@ -44,9 +56,10 @@ pub struct SettingsView {
 
 /// Complete connection data for one LLM call. No `Debug`: it holds the API key.
 pub struct LlmConfig {
+    pub provider: Provider,
     pub base_url: String,
     pub model: String,
-    /// Empty for servers without authentication (for example a local Ollama).
+    /// Empty for servers without authentication (for example a local Ollama); never empty for Azure.
     pub api_key: String,
 }
 
@@ -126,9 +139,17 @@ fn require_complete(settings: LlmSettings, api_key: String) -> Result<LlmConfig,
         return Err(AppError::Invalid("Set the base URL in Settings.".into()));
     }
     if settings.model.is_empty() {
-        return Err(AppError::Invalid("Set the model name in Settings.".into()));
+        let name = match settings.provider {
+            Provider::Openai => "model name",
+            Provider::Azure => "deployment name",
+        };
+        return Err(AppError::Invalid(format!("Set the {name} in Settings.")));
+    }
+    if settings.provider == Provider::Azure && api_key.is_empty() {
+        return Err(AppError::Invalid("Set the API key in Settings.".into()));
     }
     Ok(LlmConfig {
+        provider: settings.provider,
         base_url: settings.base_url,
         model: settings.model,
         api_key,
@@ -145,6 +166,7 @@ pub(crate) fn load_llm_config(app: &AppHandle) -> Result<LlmConfig, AppError> {
 pub fn get_settings(app: AppHandle) -> Result<SettingsView, AppError> {
     let settings = read_settings(&settings_path(&app)?)?;
     Ok(SettingsView {
+        provider: settings.provider,
         base_url: settings.base_url,
         model: settings.model,
         has_api_key: read_api_key(KEY_USER)?.is_some(),
@@ -169,6 +191,7 @@ mod tests {
 
     fn settings(base_url: &str, model: &str) -> LlmSettings {
         LlmSettings {
+            provider: Provider::Openai,
             base_url: base_url.into(),
             model: model.into(),
         }
@@ -220,6 +243,38 @@ mod tests {
     fn config_accepts_an_empty_key() {
         let config = require_complete(settings("http://x", "m"), String::new()).ok().unwrap();
         assert_eq!(config.api_key, "");
+    }
+
+    #[test]
+    fn old_file_without_provider_loads_as_openai() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SETTINGS_FILE);
+        fs::write(&path, r#"{"baseUrl":"http://x","model":"m"}"#).unwrap();
+        assert_eq!(read_settings(&path).unwrap().provider, Provider::Openai);
+    }
+
+    #[test]
+    fn provider_is_saved_as_a_lowercase_string() {
+        let azure = LlmSettings {
+            provider: Provider::Azure,
+            ..settings("https://r.cognitiveservices.azure.com", "dep")
+        };
+        let text = serde_json::to_string(&azure).unwrap();
+        assert!(text.contains(r#""provider":"azure""#), "{text}");
+    }
+
+    #[test]
+    fn azure_config_requires_a_key_and_names_the_deployment() {
+        let azure = |model: &str| LlmSettings {
+            provider: Provider::Azure,
+            ..settings("https://r.cognitiveservices.azure.com", model)
+        };
+        let no_key = require_complete(azure("dep"), String::new()).err().unwrap();
+        assert!(no_key.to_string().contains("API key"));
+        let no_deployment = require_complete(azure(""), "k".into()).err().unwrap();
+        assert!(no_deployment.to_string().contains("deployment name"));
+        let config = require_complete(azure("dep"), "k".into()).ok().unwrap();
+        assert_eq!(config.provider, Provider::Azure);
     }
 
     /// Touches the real OS credential store, so it is off by default:

@@ -79,7 +79,10 @@ const SKIPPED_DIRS: [&str; 8] = [
 /// directory, a path leaves the repo) or a grammar that cannot be loaded.
 pub fn analyze_project(repo_root: &Path, files: &[String]) -> Result<ProjectStructure, String> {
     if !repo_root.is_dir() {
-        return Err(format!("repo root is not a directory: {}", repo_root.display()));
+        return Err(format!(
+            "repo root is not a directory: {}",
+            repo_root.display()
+        ));
     }
     let project_files = normalize_project_files(files)?;
     let parsed = project_files
@@ -88,10 +91,11 @@ pub fn analyze_project(repo_root: &Path, files: &[String]) -> Result<ProjectStru
         .collect::<Result<Vec<_>, _>>()?;
 
     let python_resolver = python::Resolver::new(&project_files);
-    let namespaces = csharp::NamespaceIndex::new(parsed.iter().filter_map(|file| match &file.links {
-        Links::CSharp(unit) => Some((file.path.as_str(), unit)),
-        _ => None,
-    }));
+    let namespaces =
+        csharp::NamespaceIndex::new(parsed.iter().filter_map(|file| match &file.links {
+            Links::CSharp(unit) => Some((file.path.as_str(), unit)),
+            _ => None,
+        }));
 
     let files = parsed
         .into_iter()
@@ -99,10 +103,15 @@ pub fn analyze_project(repo_root: &Path, files: &[String]) -> Result<ProjectStru
             let targets = match &file.links {
                 Links::None => Vec::new(),
                 Links::Python(imports) => python_resolver.resolve(&file.path, imports),
-                Links::Script(specifiers) => script::resolve(&project_files, &file.path, specifiers),
+                Links::Script(specifiers) => {
+                    script::resolve(&project_files, &file.path, specifiers)
+                }
                 Links::CSharp(unit) => namespaces.resolve(unit),
             };
-            let imports: BTreeSet<String> = targets.into_iter().filter(|target| *target != file.path).collect();
+            let imports: BTreeSet<String> = targets
+                .into_iter()
+                .filter(|target| *target != file.path)
+                .collect();
             FileInfo {
                 path: file.path,
                 imports: imports.into_iter().collect(),
@@ -118,9 +127,12 @@ fn normalize_project_files(files: &[String]) -> Result<BTreeSet<String>, String>
         .iter()
         .map(|file| {
             let path = file.replace('\\', "/");
-            let is_relative = Path::new(&path)
-                .components()
-                .all(|part| matches!(part, Component::Normal(_) | Component::CurDir | Component::ParentDir));
+            let is_relative = Path::new(&path).components().all(|part| {
+                matches!(
+                    part,
+                    Component::Normal(_) | Component::CurDir | Component::ParentDir
+                )
+            });
             is_relative
                 .then(|| paths::normalize(&path))
                 .flatten()
@@ -271,7 +283,8 @@ fn collect_source_files(repo_root: &Path, project_dir: &str) -> Result<Vec<Strin
 
     let mut files = Vec::new();
     for entry in walker {
-        let entry = entry.map_err(|error| format!("cannot walk {}: {error}", project_root.display()))?;
+        let entry =
+            entry.map_err(|error| format!("cannot walk {}: {error}", project_root.display()))?;
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }

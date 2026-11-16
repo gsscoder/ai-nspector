@@ -19,11 +19,17 @@ fn specifiers(root: Node, source: &str) -> Vec<String> {
     let mut found = Vec::new();
     each_node(root, |node| {
         let literal = match node.kind() {
-            "import_statement" | "export_statement" | "import_require_clause" => node.child_by_field_name("source"),
+            "import_statement" | "export_statement" | "import_require_clause" => {
+                node.child_by_field_name("source")
+            }
             "call_expression" => loaded_module(node, source),
             _ => None,
         };
-        found.extend(literal.and_then(|node| string_value(node, source)).map(str::to_string));
+        found.extend(
+            literal
+                .and_then(|node| string_value(node, source))
+                .map(str::to_string),
+        );
     });
     found
 }
@@ -31,7 +37,8 @@ fn specifiers(root: Node, source: &str) -> Vec<String> {
 /// First argument of `require(...)` or `import(...)`.
 fn loaded_module<'tree>(call: Node<'tree>, source: &str) -> Option<Node<'tree>> {
     let function = call.child_by_field_name("function")?;
-    let loads_module = function.kind() == "import" || (function.kind() == "identifier" && node_text(function, source) == "require");
+    let loads_module = function.kind() == "import"
+        || (function.kind() == "identifier" && node_text(function, source) == "require");
     if !loads_module {
         return None;
     }
@@ -69,9 +76,10 @@ fn symbol(node: Node, source: &str) -> Option<Symbol> {
 fn declaration(node: Node, source: &str) -> Option<Symbol> {
     let kind = match node.kind() {
         "class_declaration" | "abstract_class_declaration" | "class" => SymbolKind::Class,
-        "function_declaration" | "generator_function_declaration" | "function_expression" | "generator_function" => {
-            SymbolKind::Function
-        }
+        "function_declaration"
+        | "generator_function_declaration"
+        | "function_expression"
+        | "generator_function" => SymbolKind::Function,
         "interface_declaration" => SymbolKind::Interface,
         "enum_declaration" => SymbolKind::Enum,
         "type_alias_declaration" => SymbolKind::Type,
@@ -101,10 +109,18 @@ fn is_relative(specifier: &str) -> bool {
 
 fn find_module(files: &BTreeSet<String>, path: &str) -> Option<String> {
     let existing = |candidate: &str| files.get(candidate).cloned();
-    let with_extensions = |stem: &str| SOURCE_EXTENSIONS.iter().find_map(|ext| existing(&format!("{stem}.{ext}")));
+    let with_extensions = |stem: &str| {
+        SOURCE_EXTENSIONS
+            .iter()
+            .find_map(|ext| existing(&format!("{stem}.{ext}")))
+    };
 
     existing(path)
-        .or_else(|| typescript_sources_of(path).iter().find_map(|candidate| existing(candidate)))
+        .or_else(|| {
+            typescript_sources_of(path)
+                .iter()
+                .find_map(|candidate| existing(candidate))
+        })
         .or_else(|| with_extensions(path))
         .or_else(|| with_extensions(&join(path, "index")))
 }

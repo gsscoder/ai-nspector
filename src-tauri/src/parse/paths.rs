@@ -32,7 +32,10 @@ pub(super) fn normalize(path: &str) -> Option<String> {
 pub(super) fn common_dir<'a>(paths: impl Iterator<Item = &'a str>) -> String {
     let mut common: Option<Vec<&str>> = None;
     for path in paths {
-        let dir: Vec<&str> = parent_dir(path).split('/').filter(|s| !s.is_empty()).collect();
+        let dir: Vec<&str> = parent_dir(path)
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
         common = Some(match common {
             None => dir,
             Some(prefix) => prefix

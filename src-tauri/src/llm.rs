@@ -3,15 +3,16 @@
 use std::error::Error;
 use std::time::{Duration, Instant};
 
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::AppError;
-use crate::settings::{LlmConfig, load_llm_config};
+use crate::settings::{LlmConfig, Provider, load_llm_config};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+// ponytail: whole-answer limit because the request is not streamed; stream the answer if 10 minutes is not enough
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 const ERROR_BODY_MAX_CHARS: usize = 300;
 
 #[derive(Deserialize)]
@@ -30,8 +31,24 @@ struct Message {
     content: Option<String>,
 }
 
-fn endpoint_url(base_url: &str) -> String {
-    format!("{}/chat/completions", base_url.trim_end_matches('/'))
+/// Azure takes only scheme, host and port of the base URL, so the plain resource URL and the
+/// full "Target URI" from the Foundry portal (deployment path, `api-version` query) both work.
+fn endpoint_url(provider: Provider, base_url: &str) -> Result<String, AppError> {
+    match provider {
+        Provider::Openai => Ok(format!("{}/chat/completions", base_url.trim_end_matches('/'))),
+        Provider::Azure => {
+            let origin = Url::parse(base_url)
+                .map(|url| url.origin())
+                .ok()
+                .filter(|origin| origin.is_tuple())
+                .ok_or_else(|| {
+                    AppError::Invalid(format!(
+                        "The base URL \"{base_url}\" is not a valid web address. Use the resource URL, for example https://<resource>.cognitiveservices.azure.com."
+                    ))
+                })?;
+            Ok(format!("{}/openai/v1/chat/completions", origin.ascii_serialization()))
+        }
+    }
 }
 
 fn request_body(model: &str, system: &str, user: &str, json_mode: bool) -> Value {
@@ -99,12 +116,14 @@ pub async fn complete(
         .build()
         .map_err(|e| AppError::Llm(format!("Cannot create the HTTP client: {e}")))?;
 
-    let mut request = client
-        .post(endpoint_url(&cfg.base_url))
+    let request = client
+        .post(endpoint_url(cfg.provider, &cfg.base_url)?)
         .json(&request_body(&cfg.model, system, user, json_mode));
-    if !cfg.api_key.is_empty() {
-        request = request.bearer_auth(&cfg.api_key);
-    }
+    let request = match cfg.provider {
+        Provider::Azure => request.header("api-key", &cfg.api_key),
+        Provider::Openai if !cfg.api_key.is_empty() => request.bearer_auth(&cfg.api_key),
+        Provider::Openai => request,
+    };
 
     let response = request
         .send()
@@ -189,6 +208,7 @@ mod tests {
 
     fn config(base_url: &str, api_key: &str) -> LlmConfig {
         LlmConfig {
+            provider: Provider::Openai,
             base_url: base_url.into(),
             model: "test-model".into(),
             api_key: api_key.into(),
@@ -213,8 +233,30 @@ mod tests {
 
     #[test]
     fn url_join_works_with_and_without_trailing_slash() {
-        assert_eq!(endpoint_url("http://h/v1"), "http://h/v1/chat/completions");
-        assert_eq!(endpoint_url("http://h/v1/"), "http://h/v1/chat/completions");
+        let url = |base_url| endpoint_url(Provider::Openai, base_url).unwrap();
+        assert_eq!(url("http://h/v1"), "http://h/v1/chat/completions");
+        assert_eq!(url("http://h/v1/"), "http://h/v1/chat/completions");
+    }
+
+    #[test]
+    fn azure_url_keeps_only_scheme_host_and_port() {
+        let expected = "https://res.cognitiveservices.azure.com/openai/v1/chat/completions";
+        let plain = "https://res.cognitiveservices.azure.com";
+        let target = "https://res.cognitiveservices.azure.com/openai/deployments/dep/chat/completions?api-version=2025-01-01";
+        assert_eq!(endpoint_url(Provider::Azure, plain).unwrap(), expected);
+        assert_eq!(endpoint_url(Provider::Azure, target).unwrap(), expected);
+        assert_eq!(
+            endpoint_url(Provider::Azure, "http://127.0.0.1:8080/x?y=1").unwrap(),
+            "http://127.0.0.1:8080/openai/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn azure_url_rejects_text_that_is_not_an_absolute_url() {
+        for bad in ["not a url", "res.cognitiveservices.azure.com", "mailto:a@b.c"] {
+            let error = endpoint_url(Provider::Azure, bad).unwrap_err();
+            assert!(matches!(error, AppError::Invalid(_)), "{bad}: {error}");
+        }
     }
 
     #[tokio::test]
@@ -253,6 +295,21 @@ mod tests {
 
         let (_, without_key) = call("200 OK", OK_BODY, "", false).await;
         assert!(!without_key.to_lowercase().contains("authorization"), "{without_key}");
+    }
+
+    #[tokio::test]
+    async fn azure_sends_api_key_header_and_no_authorization_header() {
+        let (base_url, server) = serve_once("200 OK", OK_BODY).await;
+        let cfg = LlmConfig {
+            provider: Provider::Azure,
+            ..config(&format!("{base_url}/openai/deployments/dep"), "secret")
+        };
+        let result = complete(&cfg, "be brief", "say hi", false).await;
+        let request = server.await.unwrap();
+        assert_eq!(result.unwrap(), "hello");
+        assert!(request.starts_with("POST /openai/v1/chat/completions HTTP/1.1"), "{request}");
+        assert!(request.to_lowercase().contains("api-key: secret\r\n"), "{request}");
+        assert!(!request.to_lowercase().contains("authorization"), "{request}");
     }
 
     #[tokio::test]

@@ -5,11 +5,16 @@ import {
   saveSettings,
   testConnection,
   type LlmSettings,
+  type Provider,
 } from "@/settingsApi";
 
 type Busy = "load" | "save" | "test" | "removeKey";
 type Status = { ok: boolean; text: string };
 
+const PROVIDERS: { value: Provider; label: string }[] = [
+  { value: "openai", label: "OpenAI-compatible" },
+  { value: "azure", label: "Azure Foundry" },
+];
 const LOCAL_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 const inputClass =
   "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50";
@@ -40,14 +45,16 @@ function Field(props: { label: string; hint?: string; action?: ReactNode; childr
 }
 
 export default function Settings({ onSaved }: { onSaved?: () => void }) {
-  const [saved, setSaved] = useState<LlmSettings>({ baseUrl: "", model: "" });
-  const [form, setForm] = useState<LlmSettings>({ baseUrl: "", model: "" });
+  const [saved, setSaved] = useState<LlmSettings>({ provider: "openai", baseUrl: "", model: "" });
+  const [form, setForm] = useState<LlmSettings>({ provider: "openai", baseUrl: "", model: "" });
   const [apiKey, setApiKey] = useState("");
   const [hasApiKey, setHasApiKey] = useState(false);
   const [busy, setBusy] = useState<Busy | null>("load");
   const [status, setStatus] = useState<Status | null>(null);
 
+  const azure = form.provider === "azure";
   const dirty =
+    form.provider !== saved.provider ||
     form.baseUrl.trim() !== saved.baseUrl ||
     form.model.trim() !== saved.model ||
     apiKey.trim() !== "";
@@ -104,6 +111,7 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
     });
 
   const disabled = busy !== null;
+  const keyMissing = azure && !hasApiKey && apiKey.trim() === "";
 
   return (
     <form
@@ -120,10 +128,34 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
         </p>
       </div>
 
-      <Field label="Base URL">
+      <div role="group" aria-label="Connection mode" className="flex gap-2">
+        {PROVIDERS.map(({ value, label }) => (
+          <Button
+            key={value}
+            type="button"
+            variant={form.provider === value ? "default" : "outline"}
+            aria-pressed={form.provider === value}
+            disabled={disabled}
+            onClick={() => setForm({ ...form, provider: value })}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+
+      <Field
+        label="Base URL"
+        hint={
+          azure
+            ? "Resource endpoint. The full Target URI from the Azure portal also works."
+            : undefined
+        }
+      >
         <input
           className={inputClass}
-          placeholder="https://api.openai.com/v1"
+          placeholder={
+            azure ? "https://<resource>.cognitiveservices.azure.com" : "https://api.openai.com/v1"
+          }
           value={form.baseUrl}
           disabled={disabled}
           onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
@@ -136,7 +168,7 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
         </p>
       )}
 
-      <Field label="Model">
+      <Field label={azure ? "Deployment name" : "Model"}>
         <input
           className={inputClass}
           placeholder="gpt-4o-mini"
@@ -147,11 +179,13 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
       </Field>
 
       <Field
-        label="API key"
+        label={azure ? "API key (required)" : "API key"}
         hint={
           hasApiKey
             ? "A key is stored in the OS credential store. Leave empty to keep it."
-            : "Saved in the OS credential store. Leave empty for local servers without a key."
+            : azure
+              ? "Required. Saved in the OS credential store."
+              : "Saved in the OS credential store. Leave empty for local servers without a key."
         }
         action={
           hasApiKey && (
@@ -173,7 +207,7 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
       </Field>
 
       <div className="flex items-center gap-2">
-        <Button type="submit" disabled={disabled || !dirty}>
+        <Button type="submit" disabled={disabled || !dirty || keyMissing}>
           Save
         </Button>
         <Button type="button" variant="outline" disabled={disabled} onClick={onTest}>

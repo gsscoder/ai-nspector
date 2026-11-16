@@ -2,7 +2,10 @@
 // the backend never returns it, only whether one is stored.
 import { invoke } from "@tauri-apps/api/core";
 
+export type Provider = "openai" | "azure";
+
 export interface LlmSettings {
+  provider: Provider;
   baseUrl: string;
   model: string;
 }

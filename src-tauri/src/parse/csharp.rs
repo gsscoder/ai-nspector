@@ -58,7 +58,9 @@ impl Extractor<'_> {
                     }
                 }
                 // Error recovery wraps the recognisable declarations of a broken file in an ERROR node.
-                "preproc_if" | "preproc_elif" | "preproc_else" | "ERROR" => self.visit_members(member, &namespace),
+                "preproc_if" | "preproc_elif" | "preproc_else" | "ERROR" => {
+                    self.visit_members(member, &namespace)
+                }
                 other => {
                     if let Some(kind) = type_kind(other) {
                         self.symbols.extend(named_symbol(member, self.source, kind));
@@ -109,7 +111,10 @@ fn using(directive: Node, source: &str) -> Option<Using> {
 /// Dotted name without whitespace and without a `global::` prefix.
 fn dotted_name(node: Node, source: &str) -> String {
     let compact: String = node_text(node, source).split_whitespace().collect();
-    compact.strip_prefix("global::").unwrap_or(&compact).to_string()
+    compact
+        .strip_prefix("global::")
+        .unwrap_or(&compact)
+        .to_string()
 }
 
 /// Namespace → files that declare it, built from all C# files of the project.
@@ -143,7 +148,9 @@ impl NamespaceIndex {
             .flat_map(|using| {
                 let direct = self.files_declaring(&using.target);
                 match using.target.rsplit_once('.') {
-                    Some((container, _)) if direct.is_empty() && using.may_name_type => self.files_declaring(container),
+                    Some((container, _)) if direct.is_empty() && using.may_name_type => {
+                        self.files_declaring(container)
+                    }
                     _ => direct,
                 }
             })
@@ -152,6 +159,8 @@ impl NamespaceIndex {
     }
 
     fn files_declaring(&self, namespace: &str) -> &[String] {
-        self.files_by_namespace.get(namespace).map_or(&[], Vec::as_slice)
+        self.files_by_namespace
+            .get(namespace)
+            .map_or(&[], Vec::as_slice)
     }
 }

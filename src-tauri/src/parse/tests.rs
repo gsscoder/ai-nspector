@@ -25,7 +25,12 @@ fn edges(structure: &ProjectStructure) -> Vec<(&str, Vec<&str>)> {
     structure
         .files
         .iter()
-        .map(|file| (file.path.as_str(), file.imports.iter().map(String::as_str).collect()))
+        .map(|file| {
+            (
+                file.path.as_str(),
+                file.imports.iter().map(String::as_str).collect(),
+            )
+        })
         .collect()
 }
 
@@ -62,12 +67,20 @@ fn python_edges_cover_src_layout_and_relative_imports() {
             ("src/app/models.py", vec![]),
             (
                 "src/app/sub/deep.py",
-                vec!["src/app/__init__.py", "src/app/models.py", "src/app/util.py"]
+                vec![
+                    "src/app/__init__.py",
+                    "src/app/models.py",
+                    "src/app/util.py"
+                ]
             ),
             ("src/app/util.py", vec![]),
             (
                 "tests/test_core.py",
-                vec!["src/app/__init__.py", "src/app/core.py", "src/app/models.py"]
+                vec![
+                    "src/app/__init__.py",
+                    "src/app/core.py",
+                    "src/app/models.py"
+                ]
             ),
         ]
     );
@@ -77,7 +90,10 @@ fn python_edges_cover_src_layout_and_relative_imports() {
 fn python_symbols_are_top_level_classes_and_functions() {
     let structure = analyze_fixture("python");
 
-    assert_eq!(symbols(&structure, "src/app/core.py"), vec![("run", Function)]);
+    assert_eq!(
+        symbols(&structure, "src/app/core.py"),
+        vec![("run", Function)]
+    );
     assert_eq!(
         symbols(&structure, "src/app/models.py"),
         vec![("User", Class), ("Admin", Class)]
@@ -93,13 +109,20 @@ fn python_symbols_are_top_level_classes_and_functions() {
 fn python_package_inside_project_dir_resolves_through_package_root() {
     let root = fixture("python");
     // Only the package is passed: the common directory is `src/app`, not the import root `src`.
-    let structure = analyze_paths(&root, &["src/app/__init__.py", "src/app/core.py", "src/app/util.py"]).unwrap();
+    let structure = analyze_paths(
+        &root,
+        &["src/app/__init__.py", "src/app/core.py", "src/app/util.py"],
+    )
+    .unwrap();
 
     assert_eq!(
         edges(&structure),
         vec![
             ("src/app/__init__.py", vec!["src/app/core.py"]),
-            ("src/app/core.py", vec!["src/app/__init__.py", "src/app/util.py"]),
+            (
+                "src/app/core.py",
+                vec!["src/app/__init__.py", "src/app/util.py"]
+            ),
             ("src/app/util.py", vec![]),
         ]
     );
@@ -112,13 +135,15 @@ fn typescript_edges_cover_index_files_js_specifiers_and_externals() {
     assert_eq!(
         edges(&structure),
         vec![
-            (
-                "src/greeter.ts",
-                vec!["src/models.ts"]
-            ),
+            ("src/greeter.ts", vec!["src/models.ts"]),
             (
                 "src/index.ts",
-                vec!["src/greeter.ts", "src/lazy.tsx", "src/lib/index.ts", "src/models.ts"]
+                vec![
+                    "src/greeter.ts",
+                    "src/lazy.tsx",
+                    "src/lib/index.ts",
+                    "src/models.ts"
+                ]
             ),
             ("src/lazy.tsx", vec!["src/greeter.ts"]),
             ("src/legacy.cjs", vec![]),
@@ -142,10 +167,18 @@ fn typescript_symbols_include_exported_and_default_declarations() {
     );
     assert_eq!(
         symbols(&structure, "src/models.ts"),
-        vec![("User", Interface), ("Role", Enum), ("Id", Type), ("Base", Class)]
+        vec![
+            ("User", Interface),
+            ("Role", Enum),
+            ("Id", Type),
+            ("Base", Class)
+        ]
     );
     assert_eq!(symbols(&structure, "src/lazy.tsx"), vec![("Lazy", Class)]);
-    assert_eq!(symbols(&structure, "src/legacy.cjs"), vec![("old", Function)]);
+    assert_eq!(
+        symbols(&structure, "src/legacy.cjs"),
+        vec![("old", Function)]
+    );
 }
 
 #[test]
@@ -160,9 +193,17 @@ fn csharp_edges_follow_using_directives_to_declaring_files() {
             ("GlobalUsings.cs", vec!["Util/Maths.cs"]),
             (
                 "Program.cs",
-                vec!["Core/Entity.cs", "Core/Money.cs", "Services/BillingService.cs", "Util/Maths.cs"]
+                vec![
+                    "Core/Entity.cs",
+                    "Core/Money.cs",
+                    "Services/BillingService.cs",
+                    "Util/Maths.cs"
+                ]
             ),
-            ("Services/BillingService.cs", vec!["Core/Entity.cs", "Core/Money.cs"]),
+            (
+                "Services/BillingService.cs",
+                vec!["Core/Entity.cs", "Core/Money.cs"]
+            ),
             ("Util/Maths.cs", vec![]),
         ]
     );
@@ -178,7 +219,10 @@ fn csharp_symbols_are_types_in_any_namespace_style() {
         vec![("Entity", Class), ("Order", Record), ("Status", Enum)]
     );
     // This file starts with a byte order mark.
-    assert_eq!(symbols(&structure, "Core/Money.cs"), vec![("Money", Struct)]);
+    assert_eq!(
+        symbols(&structure, "Core/Money.cs"),
+        vec![("Money", Struct)]
+    );
     assert_eq!(
         symbols(&structure, "Services/BillingService.cs"),
         vec![("BillingService", Class), ("IBilling", Interface)]
@@ -209,10 +253,18 @@ fn broken_syntax_still_yields_what_was_recognised() {
 #[test]
 fn unreadable_files_give_empty_file_info() {
     let dir = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("binary.py"), [0xff, 0xfe, 0x00, b'i', b'm', 0xc3, 0x28]).unwrap();
+    fs::write(
+        dir.path().join("binary.py"),
+        [0xff, 0xfe, 0x00, b'i', b'm', 0xc3, 0x28],
+    )
+    .unwrap();
     fs::write(dir.path().join("ok.py"), "import binary\n").unwrap();
 
-    let structure = analyze_paths(dir.path(), &["binary.py", "ok.py", "missing.py", "notes.txt"]).unwrap();
+    let structure = analyze_paths(
+        dir.path(),
+        &["binary.py", "ok.py", "missing.py", "notes.txt"],
+    )
+    .unwrap();
 
     assert_eq!(
         edges(&structure),
@@ -230,12 +282,19 @@ fn unreadable_files_give_empty_file_info() {
 fn oversized_files_are_listed_but_not_parsed() {
     let dir = tempfile::tempdir().unwrap();
     let padding = "#".repeat(super::MAX_PARSE_BYTES as usize);
-    fs::write(dir.path().join("big.py"), format!("def big(): pass\n{padding}")).unwrap();
+    fs::write(
+        dir.path().join("big.py"),
+        format!("def big(): pass\n{padding}"),
+    )
+    .unwrap();
     fs::write(dir.path().join("ok.py"), "import big\n").unwrap();
 
     let structure = analyze_paths(dir.path(), &["big.py", "ok.py"]).unwrap();
 
-    assert_eq!(edges(&structure), vec![("big.py", vec![]), ("ok.py", vec!["big.py"])]);
+    assert_eq!(
+        edges(&structure),
+        vec![("big.py", vec![]), ("ok.py", vec!["big.py"])]
+    );
     assert_eq!(symbols(&structure, "big.py"), vec![]);
 }
 
@@ -254,7 +313,11 @@ fn imports_are_unique_sorted_and_never_the_file_itself() {
 
     assert_eq!(
         edges(&structure),
-        vec![("a.js", vec!["b.js", "c.js"]), ("b.js", vec![]), ("c.js", vec![])]
+        vec![
+            ("a.js", vec!["b.js", "c.js"]),
+            ("b.js", vec![]),
+            ("c.js", vec![])
+        ]
     );
 }
 
@@ -264,7 +327,11 @@ fn backslash_paths_are_accepted_and_reported_with_forward_slashes() {
 
     let structure = analyze_paths(
         &root,
-        &["src\\app\\__init__.py", "src\\app\\core.py", "src\\app\\util.py"],
+        &[
+            "src\\app\\__init__.py",
+            "src\\app\\core.py",
+            "src\\app\\util.py",
+        ],
     )
     .unwrap();
 
@@ -272,7 +339,10 @@ fn backslash_paths_are_accepted_and_reported_with_forward_slashes() {
         edges(&structure),
         vec![
             ("src/app/__init__.py", vec!["src/app/core.py"]),
-            ("src/app/core.py", vec!["src/app/__init__.py", "src/app/util.py"]),
+            (
+                "src/app/core.py",
+                vec!["src/app/__init__.py", "src/app/util.py"]
+            ),
             ("src/app/util.py", vec![]),
         ]
     );
@@ -282,9 +352,17 @@ fn backslash_paths_are_accepted_and_reported_with_forward_slashes() {
 fn paths_outside_the_repo_and_a_bad_root_are_errors() {
     let root = fixture("python");
 
-    assert!(analyze_paths(&root, &["../escape.py"]).unwrap_err().contains("../escape.py"));
+    assert!(
+        analyze_paths(&root, &["../escape.py"])
+            .unwrap_err()
+            .contains("../escape.py")
+    );
     assert!(analyze_paths(&root, &["/etc/passwd.py"]).is_err());
-    assert!(analyze_paths(&root.join("missing"), &[]).unwrap_err().contains("not a directory"));
+    assert!(
+        analyze_paths(&root.join("missing"), &[])
+            .unwrap_err()
+            .contains("not a directory")
+    );
 }
 
 #[test]
@@ -300,17 +378,29 @@ fn symbols_serialize_with_lowercase_kind() {
         .unwrap();
 
     assert_eq!(models["imports"], serde_json::json!([]));
-    assert_eq!(models["symbols"][2], serde_json::json!({ "name": "Id", "kind": "type" }));
+    assert_eq!(
+        models["symbols"][2],
+        serde_json::json!({ "name": "Id", "kind": "type" })
+    );
 }
 
 #[test]
 fn debug_walk_skips_build_folders_and_other_languages() {
     let dir = tempfile::tempdir().unwrap();
-    for file in ["app/a.py", "app/node_modules/x.js", "app/obj/y.cs", "app/readme.md", "other/b.py"] {
+    for file in [
+        "app/a.py",
+        "app/node_modules/x.js",
+        "app/obj/y.cs",
+        "app/readme.md",
+        "other/b.py",
+    ] {
         let path = dir.path().join(file);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, "").unwrap();
     }
 
-    assert_eq!(collect_source_files(dir.path(), "app").unwrap(), vec!["app/a.py"]);
+    assert_eq!(
+        collect_source_files(dir.path(), "app").unwrap(),
+        vec!["app/a.py"]
+    );
 }

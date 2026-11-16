@@ -105,7 +105,10 @@ pub fn load(repo: &Path, project_id: &str) -> Result<Option<ModulesFile>, AppErr
         Err(e) => return Err(AppError::Io(format!("Cannot read {}", path.display()), e)),
     };
     serde_json::from_str(&text).map(Some).map_err(|e| {
-        AppError::Json(format!("{} is damaged, regenerate the modules", path.display()), e)
+        AppError::Json(
+            format!("{} is damaged, regenerate the modules", path.display()),
+            e,
+        )
     })
 }
 
@@ -151,8 +154,14 @@ pub fn cache_key(repo: &Path, project: &Project) -> String {
         let head = head.trim();
         // Paths relative to the project folder. Staged, unstaged and untracked changes.
         // `-z` keeps non-ASCII names unquoted.
-        let changed = git(&dir, &["diff", "-z", "--relative", "--name-only", "HEAD", "--", "."])
-            .zip(git(&dir, &["ls-files", "-z", "-o", "--exclude-standard", "--", "."]));
+        let changed = git(
+            &dir,
+            &["diff", "-z", "--relative", "--name-only", "HEAD", "--", "."],
+        )
+        .zip(git(
+            &dir,
+            &["ls-files", "-z", "-o", "--exclude-standard", "--", "."],
+        ));
         if let Some((tracked, untracked)) = changed {
             let all = format!("{tracked}{untracked}");
             let paths: Vec<&str> = all.split('\u{0}').filter(|l| !l.is_empty()).collect();
@@ -163,7 +172,10 @@ pub fn cache_key(repo: &Path, project: &Project) -> String {
             };
         }
     }
-    format!("fp:{}", fingerprint(repo, project.files.iter().map(String::as_str)))
+    format!(
+        "fp:{}",
+        fingerprint(repo, project.files.iter().map(String::as_str))
+    )
 }
 
 pub fn now_rfc3339() -> String {
@@ -226,13 +238,19 @@ mod tests {
                 id: "a".into(),
                 name: "A".into(),
                 purpose: "p".into(),
-                files: vec![ModuleFile { path: "a.ts".into(), primary: true }],
+                files: vec![ModuleFile {
+                    path: "a.ts".into(),
+                    primary: true,
+                }],
             }],
             outdated: true,
         };
         assert_eq!(load(dir.path(), "package.json").unwrap(), None);
         save(dir.path(), "package.json", &mut file).unwrap();
-        assert_eq!(fs::read_to_string(dir.path().join(".ainspector/.gitignore")).unwrap(), "*\n");
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".ainspector/.gitignore")).unwrap(),
+            "*\n"
+        );
         let loaded = load(dir.path(), "package.json").unwrap().unwrap();
         assert_eq!(loaded, file);
         assert!(!loaded.outdated);
@@ -271,7 +289,16 @@ mod tests {
         assert!(git_ok(d, &["add", "."]));
         assert!(git_ok(
             d,
-            &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                "x"
+            ]
         ));
         true
     }
@@ -297,7 +324,10 @@ mod tests {
         if !committed_repo(d) {
             return;
         }
-        assert!(git_ok(d, &["config", "core.fsmonitor", "echo > fsmonitor-ran"]));
+        assert!(git_ok(
+            d,
+            &["config", "core.fsmonitor", "echo > fsmonitor-ran"]
+        ));
         fs::write(d.join("a.ts"), "changed").unwrap();
         cache_key(d, &project(&["a.ts"]));
         assert!(!d.join("fsmonitor-ran").exists());
@@ -314,13 +344,28 @@ mod tests {
         assert!(git_ok(d, &["add", "."]));
         assert!(git_ok(
             d,
-            &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                "x"
+            ]
         ));
         let p = project(&["a.ts"]);
         let clean = cache_key(d, &p);
-        assert!(clean.starts_with("git:") && !clean.contains("+fp:"), "{clean}");
+        assert!(
+            clean.starts_with("git:") && !clean.contains("+fp:"),
+            "{clean}"
+        );
         fs::write(d.join("a.ts"), "changed").unwrap();
         let dirty = cache_key(d, &p);
-        assert!(dirty.starts_with(&clean) && dirty.contains("+fp:"), "{dirty}");
+        assert!(
+            dirty.starts_with(&clean) && dirty.contains("+fp:"),
+            "{dirty}"
+        );
     }
 }

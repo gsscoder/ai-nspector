@@ -74,7 +74,15 @@ fn user_prompt(structure: &ProjectStructure, with_symbols: bool) -> String {
             let symbols: Vec<String> = file
                 .symbols
                 .iter()
-                .map(|s| format!("{}({})", s.name, serde_json::to_string(&s.kind).unwrap_or_default().trim_matches('"')))
+                .map(|s| {
+                    format!(
+                        "{}({})",
+                        s.name,
+                        serde_json::to_string(&s.kind)
+                            .unwrap_or_default()
+                            .trim_matches('"')
+                    )
+                })
                 .collect();
             text.push_str(" | symbols: ");
             text.push_str(&symbols.join(", "));
@@ -104,7 +112,11 @@ fn slug(name: &str) -> String {
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect();
-    let s = s.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-");
+    let s = s
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
     if s.is_empty() { "module".into() } else { s }
 }
 
@@ -156,7 +168,11 @@ fn validate(answer: &str, project_files: &[String]) -> Result<Vec<Module>, AppEr
                 Some(file)
             })
             .collect();
-        let id = if module.id.trim().is_empty() { slug(&module.name) } else { slug(&module.id) };
+        let id = if module.id.trim().is_empty() {
+            slug(&module.name)
+        } else {
+            slug(&module.id)
+        };
         module.id = claim_unique_id(&mut ids, id);
     }
     // A file with no primary claim gets its first module as primary.
@@ -172,11 +188,17 @@ fn validate(answer: &str, project_files: &[String]) -> Result<Vec<Module>, AppEr
     }
     modules.retain(|m| !m.files.is_empty());
 
-    let assigned: HashSet<&str> = modules.iter().flat_map(|m| m.files.iter().map(|f| f.path.as_str())).collect();
+    let assigned: HashSet<&str> = modules
+        .iter()
+        .flat_map(|m| m.files.iter().map(|f| f.path.as_str()))
+        .collect();
     let leftover: Vec<ModuleFile> = project_files
         .iter()
         .filter(|p| !assigned.contains(p.as_str()))
-        .map(|p| ModuleFile { path: p.clone(), primary: true })
+        .map(|p| ModuleFile {
+            path: p.clone(),
+            primary: true,
+        })
         .collect();
     if !leftover.is_empty() {
         modules.push(Module {
@@ -205,7 +227,10 @@ fn find_project(repo: &Path, project_id: &str) -> Result<Project, AppError> {
 }
 
 #[tauri::command]
-pub async fn load_modules(repo_path: String, project_id: String) -> Result<Option<ModulesFile>, AppError> {
+pub async fn load_modules(
+    repo_path: String,
+    project_id: String,
+) -> Result<Option<ModulesFile>, AppError> {
     tauri::async_runtime::spawn_blocking(move || {
         let repo = Path::new(&repo_path);
         let Some(mut file) = store::load(repo, &project_id)? else {
@@ -225,7 +250,11 @@ pub fn cancel_generation() {
 }
 
 #[tauri::command]
-pub async fn generate_modules(app: AppHandle, repo_path: String, project_id: String) -> Result<ModulesFile, AppError> {
+pub async fn generate_modules(
+    app: AppHandle,
+    repo_path: String,
+    project_id: String,
+) -> Result<ModulesFile, AppError> {
     let _run = RunGuard::acquire()?;
     CANCEL.store(false, Ordering::SeqCst);
     let cfg = load_llm_config(&app)?;
@@ -284,7 +313,10 @@ mod tests {
     }
 
     fn paths(m: &Module) -> Vec<(&str, bool)> {
-        m.files.iter().map(|f| (f.path.as_str(), f.primary)).collect()
+        m.files
+            .iter()
+            .map(|f| (f.path.as_str(), f.primary))
+            .collect()
     }
 
     #[test]
@@ -301,7 +333,10 @@ mod tests {
         let json = r#"{"modules":[{"id":"a","name":"A","purpose":"p","files":[{"path":"x.ts","primary":true}]}]}"#;
         let modules = validate(json, &files(&["x.ts", "y.ts"])).unwrap();
         let last = modules.last().unwrap();
-        assert_eq!((last.name.as_str(), paths(last)), ("Unassigned", vec![("y.ts", true)]));
+        assert_eq!(
+            (last.name.as_str(), paths(last)),
+            ("Unassigned", vec![("y.ts", true)])
+        );
     }
 
     #[test]
@@ -310,13 +345,19 @@ mod tests {
         let modules = validate(json, &files(&["x.ts", "y.ts"])).unwrap();
         assert_eq!(modules.len(), 2);
         assert_eq!(modules[0].id, "unassigned");
-        assert_eq!((modules[1].name.as_str(), modules[1].id.as_str()), ("Unassigned", "unassigned-2"));
+        assert_eq!(
+            (modules[1].name.as_str(), modules[1].id.as_str()),
+            ("Unassigned", "unassigned-2")
+        );
     }
 
     #[test]
     fn only_one_generation_runs_at_a_time() {
         let first = RunGuard::acquire().unwrap();
-        assert_eq!(RunGuard::acquire().err().unwrap().to_string(), "A generation is already running.");
+        assert_eq!(
+            RunGuard::acquire().err().unwrap().to_string(),
+            "A generation is already running."
+        );
         drop(first);
         assert!(RunGuard::acquire().is_ok());
     }
@@ -336,7 +377,13 @@ mod tests {
         let json = r#"{"modules":[{"id":"a","name":"A","files":[{"path":"x.ts","primary":true},{"path":"y.ts"}]},
             {"id":"a","name":"B","files":[{"path":"x.ts","primary":true}]}]}"#;
         let modules = validate(json, &files(&["x.ts", "y.ts"])).unwrap();
-        let primaries = |p: &str| modules.iter().flat_map(|m| &m.files).filter(|f| f.path == p && f.primary).count();
+        let primaries = |p: &str| {
+            modules
+                .iter()
+                .flat_map(|m| &m.files)
+                .filter(|f| f.path == p && f.primary)
+                .count()
+        };
         assert_eq!((primaries("x.ts"), primaries("y.ts")), (1, 1));
         assert_ne!(modules[0].id, modules[1].id);
     }
@@ -364,13 +411,23 @@ mod tests {
                 .map(|i| FileInfo {
                     path: format!("src/file{i}.ts"),
                     imports: vec![],
-                    symbols: (0..symbols).map(|s| Symbol { name: format!("sym{s}xxxxxxxxxxxxxxxxxxxx"), kind: SymbolKind::Class }).collect(),
+                    symbols: (0..symbols)
+                        .map(|s| Symbol {
+                            name: format!("sym{s}xxxxxxxxxxxxxxxxxxxx"),
+                            kind: SymbolKind::Class,
+                        })
+                        .collect(),
                 })
                 .collect(),
         };
         // Fits only without symbols.
         let prompt = build_prompt(&big(5_000, 40)).unwrap();
         assert!(!prompt.contains("symbols:"));
-        assert!(build_prompt(&big(20_000, 0)).unwrap_err().to_string().contains("20000 files"));
+        assert!(
+            build_prompt(&big(20_000, 0))
+                .unwrap_err()
+                .to_string()
+                .contains("20000 files")
+        );
     }
 }
