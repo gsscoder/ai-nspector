@@ -75,7 +75,7 @@ export default function ProjectView({
     <section className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">{projectLabel(project)}</h2>
+          <h2 className="text-xl font-semibold tracking-tight">{projectLabel(project)}</h2>
           <p className="text-sm text-muted-foreground">
             {project.files.length} {project.files.length === 1 ? "file" : "files"}
             {data && ` · ${data.modules.length} ${data.modules.length === 1 ? "module" : "modules"}`}
@@ -89,8 +89,8 @@ export default function ProjectView({
           )}
           {generating ? (
             <>
-              <span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              <span role="status" className="text-sm text-muted-foreground">
+              <span className="spinner" />
+              <span role="status" className="text-sm text-muted-foreground tabular-nums">
                 {stage}… {seconds}s
               </span>
               <Button variant="outline" onClick={cancelGeneration}>
@@ -112,8 +112,8 @@ export default function ProjectView({
         </p>
       )}
       {!data && !generating && !error && (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed p-10 text-center">
-          <Boxes className="size-8 text-muted-foreground" />
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed p-12 text-center">
+          <Boxes className="size-6 text-muted-foreground/60" />
           <p className="text-sm text-muted-foreground">No modules yet. Generate them to see how this project is organized.</p>
         </div>
       )}
@@ -122,7 +122,7 @@ export default function ProjectView({
           {data.modules.map((m) => (
             <button
               key={m.id}
-              className="flex flex-col rounded-xl border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-muted/40"
+              className="flex flex-col rounded-xl border bg-card p-4 text-left outline-none transition-colors hover:border-foreground/20 hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
               onClick={() => onOpenModule(m.id)}
             >
               <div className="font-medium">{m.name}</div>

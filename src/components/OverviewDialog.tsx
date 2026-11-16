@@ -82,8 +82,8 @@ export default function OverviewDialog({
   const noDocs = repo.docs.length === 0;
   const progress = (
     <>
-      <span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-      <span role="status" className="text-sm text-muted-foreground">
+      <span className="spinner" />
+      <span role="status" className="text-sm text-muted-foreground tabular-nums">
         {stage}… {seconds}s
       </span>
     </>
@@ -178,7 +178,7 @@ export default function OverviewDialog({
               </div>
             )}
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm text-muted-foreground tabular-nums">
                 {files.length} {files.length === 1 ? "file" : "files"} · ~{tokens} tokens
                 {overBudget && <span className="text-destructive"> · Too many tokens. Select fewer files.</span>}
               </p>

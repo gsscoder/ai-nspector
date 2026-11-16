@@ -12,7 +12,7 @@ export interface PendingTurn {
 }
 
 function Message({ message }: { message: ChatMessage }) {
-  if (message.role === "assistant") return <p className="text-sm whitespace-pre-wrap">{message.content}</p>;
+  if (message.role === "assistant") return <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>;
   return <p className="ml-auto max-w-[85%] rounded-lg bg-muted px-3 py-2 text-sm whitespace-pre-wrap">{message.content}</p>;
 }
 
@@ -74,7 +74,7 @@ export default function ChatPanel({
 
   return (
     <section className={`flex shrink-0 flex-col rounded-xl border bg-card ${open ? "h-[40vh]" : ""}`}>
-      <div className="flex items-center gap-2 px-3 py-2">
+      <div className="flex items-center gap-2 px-1.5 py-1.5">
         <Button variant="ghost" size="sm" aria-expanded={open} onClick={onToggle}>
           {open ? <ChevronDown /> : <ChevronRight />}
           {title}
@@ -92,7 +92,13 @@ export default function ChatPanel({
         <div className="ml-auto flex items-center gap-2">
           {progress && <GenerationProgress stage={progress.stage} seconds={progress.seconds} />}
           {chat && (
-            <Button variant="ghost" size="sm" disabled={progress !== null} onClick={() => setConfirming(true)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              disabled={progress !== null}
+              onClick={() => setConfirming(true)}
+            >
               <Trash2 />
               Discard
             </Button>
@@ -101,24 +107,24 @@ export default function ChatPanel({
       </div>
       {open && (
         <>
-          <div ref={log} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto border-t px-3 py-3">
+          <div ref={log} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto border-t p-4">
             {chat?.messages.map((m, i) => <Message key={i} message={m} />)}
             {pending?.question && <Message message={{ role: "user", content: pending.question }} />}
             {pending && pending.reply !== "" && <Message message={{ role: "assistant", content: pending.reply }} />}
           </div>
           {error && (
-            <p role="alert" className="px-3 pb-2 text-sm text-destructive">
+            <p role="alert" className="px-4 pb-2 text-sm text-destructive">
               {error}
             </p>
           )}
           {chat?.outdated && (
-            <p className="px-3 pb-2 text-sm text-muted-foreground">
+            <p className="px-4 pb-2 text-sm text-muted-foreground">
               The module files changed. Discard the chat and run the analysis again.
             </p>
           )}
           <div className="flex items-end gap-2 border-t p-3">
             <textarea
-              className="min-h-16 w-full resize-none rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+              className="field min-h-16 resize-none py-1.5"
               aria-label="Message"
               placeholder="Ask about the findings. Enter sends, Shift+Enter adds a line."
               value={text}
@@ -133,7 +139,7 @@ export default function ChatPanel({
             />
             <Button variant="outline" disabled={locked} onClick={onCreateAgentPrompt}>
               <Sparkles />
-              Create Agent Prompt
+              Create agent prompt
             </Button>
           </div>
         </>

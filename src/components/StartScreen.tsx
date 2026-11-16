@@ -45,15 +45,16 @@ export default function StartScreen({ onOpen }: { onOpen: (repo: Repo) => void }
             {recent.map((path) => (
               <li key={path}>
                 <button
-                  className="group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/60"
+                  className="group flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
+                  title={path}
                   onClick={() => open(async () => path)}
                 >
-                  <FolderGit2 className="size-4 shrink-0 text-muted-foreground group-hover:text-primary" />
+                  <FolderGit2 className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{path.split(/[\\/]/).filter(Boolean).pop() ?? path}</div>
                     <div className="truncate text-xs text-muted-foreground">{path}</div>
                   </div>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-muted-foreground" />
                 </button>
               </li>
             ))}

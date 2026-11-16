@@ -107,6 +107,8 @@
     --border: oklch(1 0 0 / 9%);
     --input: oklch(1 0 0 / 14%);
     --ring: oklch(0.585 0.2 277);
+    --notice: oklch(0.25 0.04 258);
+    --notice-foreground: oklch(0.87 0.05 255);
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
@@ -122,9 +124,23 @@
     --sidebar-ring: oklch(0.556 0 0);
 }
 
+@utility spinner {
+    @apply size-4 shrink-0 animate-spin rounded-full border-2 border-current/25 border-t-current;
+}
+
+/* Text input and textarea; the caller sets the height. */
+@utility field {
+    @apply w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground/70 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 dark:bg-input/30;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent) transparent;
+    }
+  ::selection {
+    @apply bg-primary/35;
     }
   body {
     @apply bg-background text-foreground;

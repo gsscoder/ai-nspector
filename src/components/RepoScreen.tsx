@@ -34,7 +34,7 @@ function Crumb({
         {items.map((i) => (
           <DropdownMenuCheckboxItem key={i.id} checked={i.id === selected} onCheckedChange={() => onSelect(i.id)}>
             {i.label}
-            {i.hint && <span className="text-muted-foreground">{i.hint}</span>}
+            {i.hint && <span className="ml-auto pl-6 text-xs text-muted-foreground">{i.hint}</span>}
           </DropdownMenuCheckboxItem>
         ))}
       </DropdownMenuContent>
@@ -64,7 +64,7 @@ export default function RepoScreen({
 
   return (
     <div className="flex h-full flex-col gap-6">
-      <nav className="-mx-2 flex items-center gap-1 text-sm">
+      <nav className="-mx-2.5 flex items-center gap-1 text-sm">
         <Button variant="ghost" size="sm" onClick={() => setOverviewOpen(true)}>
           <span className="relative">
             <BookOpen />
@@ -85,7 +85,7 @@ export default function RepoScreen({
           <FolderGit2 className="text-primary" />
           {repo.name}
         </Button>
-        {project && <ChevronRight className="size-4 text-muted-foreground" />}
+        {project && <ChevronRight className="size-3.5 text-muted-foreground/50" />}
         {project && (
           <Crumb
             label={projectLabel(project)}
@@ -104,7 +104,7 @@ export default function RepoScreen({
         )}
         {module && data && (
           <>
-            <ChevronRight className="size-4 text-muted-foreground" />
+            <ChevronRight className="size-3.5 text-muted-foreground/50" />
             <Crumb
               label={module.name}
               selected={module.id}
@@ -126,13 +126,13 @@ export default function RepoScreen({
             {repo.projects.map((p) => (
               <button
                 key={p.id}
-                className="rounded-xl border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-muted/40"
+                className="rounded-xl border bg-card p-4 text-left outline-none transition-colors hover:border-foreground/20 hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                 onClick={() => setProjectId(p.id)}
               >
                 <div className="font-medium">{projectLabel(p)}</div>
                 <div className="truncate text-sm text-muted-foreground">{p.root === "" ? "repo root" : p.root}</div>
                 <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="rounded-md bg-primary/15 px-2 py-0.5 font-medium text-primary">{STACK[p.language]}</span>
+                  <span className="rounded-md bg-muted px-1.5 py-0.5 font-medium text-foreground/80">{STACK[p.language]}</span>
                   {p.files.length} {p.files.length === 1 ? "file" : "files"}
                 </div>
               </button>

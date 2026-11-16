@@ -16,8 +16,7 @@ const PROVIDERS: { value: Provider; label: string }[] = [
   { value: "azure", label: "Azure Foundry" },
 ];
 const LOCAL_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
-const inputClass =
-  "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50";
+const inputClass = "field h-8";
 
 /** True when the key would travel unencrypted to a machine other than this one. */
 function isUnencryptedRemote(baseUrl: string): boolean {
@@ -31,9 +30,9 @@ function isUnencryptedRemote(baseUrl: string): boolean {
 
 function Field(props: { label: string; hint?: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       <div className="flex items-end gap-2">
-        <label className="block flex-1 space-y-1">
+        <label className="block flex-1 space-y-1.5">
           <span className="text-sm font-medium">{props.label}</span>
           {props.children}
         </label>
@@ -115,25 +114,27 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
 
   return (
     <form
-      className="mx-auto max-w-xl space-y-4"
+      className="mx-auto max-w-xl space-y-5"
       onSubmit={(event) => {
         event.preventDefault();
         void onSave();
       }}
     >
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">LLM settings</h2>
-        <p className="text-sm text-muted-foreground">
+        <h2 className="text-xl font-semibold tracking-tight">LLM settings</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
           Works with any OpenAI-compatible API: OpenAI, OpenRouter, Azure, Ollama, LM Studio.
         </p>
       </div>
 
-      <div role="group" aria-label="Connection mode" className="flex gap-2">
+      <div role="group" aria-label="Connection mode" className="flex w-fit gap-0.5 rounded-lg border bg-card p-0.5">
         {PROVIDERS.map(({ value, label }) => (
           <Button
             key={value}
             type="button"
-            variant={form.provider === value ? "default" : "outline"}
+            size="sm"
+            variant={form.provider === value ? "secondary" : "ghost"}
+            className={form.provider === value ? "" : "text-muted-foreground"}
             aria-pressed={form.provider === value}
             disabled={disabled}
             onClick={() => setForm({ ...form, provider: value })}
@@ -206,13 +207,13 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
         />
       </Field>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 pt-1">
         <Button type="submit" disabled={disabled || !dirty || keyMissing}>
           Save
         </Button>
         <Button type="button" variant="outline" disabled={disabled} onClick={onTest}>
           {busy === "test" && (
-            <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            <span className="spinner size-3.5" />
           )}
           {busy === "test" ? "Testing…" : "Test connection"}
         </Button>

@@ -37,11 +37,11 @@ export default function CodeView({ repoPath, path }: { repoPath: string; path: s
     };
   }, [repoPath, path]);
 
-  if (!state) return <p className="text-sm text-muted-foreground">Loading…</p>;
-  if ("error" in state) return <p className="text-sm text-destructive">{state.error}</p>;
+  if (!state) return <p className="p-4 text-sm text-muted-foreground">Loading…</p>;
+  if ("error" in state) return <p className="p-4 text-sm text-destructive">{state.error}</p>;
   return (
     <div
-      className="min-h-0 flex-1 overflow-auto rounded-xl border text-[13px] leading-relaxed [&_pre]:bg-card! [&_pre]:p-4"
+      className="min-h-0 flex-1 overflow-auto text-[13px] leading-relaxed [&_pre]:w-max [&_pre]:min-w-full [&_pre]:bg-transparent! [&_pre]:p-4 [&_pre]:outline-none"
       dangerouslySetInnerHTML={{ __html: state.html }} // Shiki output: source text is escaped
     />
   );

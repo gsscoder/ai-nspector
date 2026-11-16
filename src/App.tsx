@@ -49,12 +49,17 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b bg-card/40 px-4">
-        <h1 className="flex items-center gap-2 font-semibold tracking-tight">
-          <ScanSearch className="size-5 text-primary" />
+      <header className="flex h-12 shrink-0 items-center justify-between border-b bg-card/40 px-6">
+        <h1 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+          <ScanSearch className="size-4 text-primary" />
           ai-nspector
         </h1>
-        <Button variant="ghost" size="sm" onClick={() => setShowSettings(!showSettings)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="-mr-2.5 text-muted-foreground"
+          onClick={() => setShowSettings(!showSettings)}
+        >
           {showSettings ? <ArrowLeft /> : <Settings2 />}
           {showSettings ? "Back" : "Settings"}
         </Button>

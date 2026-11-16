@@ -30,7 +30,7 @@ export default function AnalysisPanel({
   return (
     <aside className="w-64 shrink-0 overflow-y-auto">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-medium">Analyses</h3>
+        <h3 className="text-xs font-medium tracking-wider text-muted-foreground uppercase">Analyses</h3>
         <Button variant="ghost" size="icon-sm" aria-label="Hide analyses" onClick={() => setOpen(false)}>
           <PanelRightClose />
         </Button>
@@ -43,7 +43,7 @@ export default function AnalysisPanel({
           const hasChat = chat?.analysis === a.id;
           return (
             <li key={a.id} className="rounded-xl border bg-card p-3">
-              <div className="font-medium">{a.name}</div>
+              <div className="text-sm font-medium">{a.name}</div>
               <div className="mt-1 text-sm text-muted-foreground">{a.description}</div>
               <Button
                 className="mt-3"

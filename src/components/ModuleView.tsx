@@ -94,15 +94,16 @@ export default function ModuleView({
   return (
     <div className="flex min-h-0 flex-1 gap-6">
       <aside className="w-72 shrink-0 overflow-y-auto">
-        <h2 className="text-2xl font-semibold tracking-tight">{module.name}</h2>
-        <p className="mt-1 mb-4 text-sm text-muted-foreground">{module.purpose}</p>
+        <h2 className="text-xl leading-snug font-semibold tracking-tight">{module.name}</h2>
+        <p className="mt-1.5 mb-4 text-sm text-muted-foreground">{module.purpose}</p>
         <ul className="flex flex-col gap-0.5">
           {files.map((f) => {
             const { name, dir } = splitPath(f.path);
             return (
               <li key={f.path}>
                 <button
-                  className={`w-full rounded-md border-l-2 px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-muted/60 ${f.path === selected ? "border-primary bg-muted" : "border-transparent"}`}
+                  className={`w-full rounded-md px-2.5 py-1.5 text-left text-sm outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 ${f.path === selected ? "bg-muted" : "hover:bg-muted/50"}`}
+                  title={f.path}
                   aria-current={f.path === selected ? "true" : undefined}
                   onClick={() => {
                     setSelected(f.path);
@@ -112,7 +113,7 @@ export default function ModuleView({
                   <div className="flex items-center gap-2">
                     <span className="truncate">{name}</span>
                     {!f.primary && (
-                      <span className="shrink-0 rounded bg-muted px-1.5 text-[11px] text-muted-foreground">secondary</span>
+                      <span className="shrink-0 rounded border px-1 text-[10px] leading-4 text-muted-foreground">secondary</span>
                     )}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">{dir}</div>
@@ -124,14 +125,17 @@ export default function ModuleView({
       </aside>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-6">
         <div className="flex min-h-0 flex-1 gap-6">
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
             {selected ? (
               <>
-                <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
-                  <span className="truncate font-mono text-xs text-muted-foreground">{selected}</span>
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b py-1.5 pr-1.5 pl-4">
+                  <span className="truncate font-mono text-xs text-muted-foreground" title={selected}>
+                    {selected}
+                  </span>
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
+                    className="text-muted-foreground"
                     onClick={() =>
                       openInEditor(repoRoot, selected).then(
                         () => setOpenError(null),
@@ -144,14 +148,14 @@ export default function ModuleView({
                   </Button>
                 </div>
                 {openError && (
-                  <p role="alert" className="mb-2 text-sm text-destructive">
+                  <p role="alert" className="shrink-0 border-b px-4 py-2 text-sm text-destructive">
                     {openError}
                   </p>
                 )}
                 <CodeView repoPath={repoRoot} path={selected} />
               </>
             ) : (
-              <p className="text-sm text-muted-foreground">This module has no files.</p>
+              <p className="p-4 text-sm text-muted-foreground">This module has no files.</p>
             )}
           </section>
           <AnalysisPanel

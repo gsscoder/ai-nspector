@@ -50,7 +50,7 @@ export default function AgentPromptDialog({
           </DialogDescription>
         </div>
         <textarea
-          className="h-80 w-full resize-none rounded-lg border border-input bg-background px-2.5 py-1.5 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+          className="field h-80 resize-none py-2 font-mono text-xs leading-relaxed"
           aria-label="Agent prompt"
           value={prompt ?? ""}
           disabled={generating}
