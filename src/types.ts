@@ -52,6 +52,7 @@ export interface ModulesFile {
 // Mirrors the struct in src-tauri/src/overview.rs. generatedAt is RFC 3339.
 export interface OverviewInfo {
   generatedAt: string;
+  files: string[];
 }
 
 // Mirror the structs in src-tauri/src/analysis.rs. createdAt is RFC 3339.

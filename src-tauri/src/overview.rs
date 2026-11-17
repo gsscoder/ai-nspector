@@ -8,8 +8,9 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::time::SystemTime;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::error::AppError;
@@ -21,6 +22,9 @@ use crate::store::{self, Module};
 
 pub(crate) const OVERVIEW_FILE: &str = "overview.md";
 const BRIEF_FILE: &str = "brief.md";
+const META_FILE: &str = "overview.json";
+/// Most doc files one overview run accepts.
+pub(crate) const MAX_FILES: usize = 5;
 const INSUFFICIENT_SOURCES: &str = "INSUFFICIENT_SOURCES";
 const NOT_DOCUMENTED: &str = "Not documented.";
 const NOT_DESCRIBED: &str = "The selected files do not describe the project. Select other files.";
@@ -78,11 +82,14 @@ rules:
 - use only facts from the overview and skip headings that say Not documented.
 - write in English, with no heading and no text outside the bullets"#;
 
-#[derive(Debug, PartialEq, Serialize)]
+/// The content of `overview.json`.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewInfo {
-    /// RFC 3339, UTC: modified time of `brief.md`.
+    /// RFC 3339, UTC.
     pub generated_at: String,
+    /// The doc files of a documented run; empty for an inferred run.
+    pub files: Vec<String>,
 }
 
 /// Why the overview answer is not accepted.
@@ -227,6 +234,11 @@ fn validate_brief(answer: &str) -> Result<String, AppError> {
 fn check_selection(docs: &[DocFile], files: &[String]) -> Result<(), AppError> {
     if files.is_empty() {
         return Err(AppError::Invalid("Select at least one file.".into()));
+    }
+    if files.len() > MAX_FILES {
+        return Err(AppError::Invalid(format!(
+            "Select at most {MAX_FILES} files."
+        )));
     }
     match files
         .iter()
@@ -449,19 +461,27 @@ async fn request_brief(cfg: &LlmConfig, overview: &str) -> Result<String, AppErr
     validate_brief(&ask(cfg, BRIEF_PROMPT, &input).await?)
 }
 
-fn read_info(brief: &Path) -> io::Result<OverviewInfo> {
-    let modified = fs::metadata(brief)?.modified()?;
-    Ok(OverviewInfo {
-        generated_at: store::rfc3339(modified),
-    })
-}
-
-/// Writes both files to temp names, then renames them over the old ones, so a failed write
-/// leaves the old files untouched.
-fn save(repo: &Path, overview: &str, brief: &str) -> Result<OverviewInfo, AppError> {
+/// Writes the overview, the brief and the metadata to temp names, then renames them over the old
+/// ones, so a failed write leaves the old files untouched.
+fn save(
+    repo: &Path,
+    overview: &str,
+    brief: &str,
+    selected: &[String],
+) -> Result<OverviewInfo, AppError> {
+    let info = OverviewInfo {
+        generated_at: store::rfc3339(SystemTime::now()),
+        files: selected.to_vec(),
+    };
+    let meta = serde_json::to_string_pretty(&info)
+        .map_err(|e| AppError::Json("Cannot serialize the overview metadata".into(), e))?;
     let dir = store::ensure_store_dir(repo)?;
-    let files = [(OVERVIEW_FILE, overview), (BRIEF_FILE, brief)]
-        .map(|(name, text)| (dir.join(format!("{name}.tmp")), dir.join(name), text));
+    let files = [
+        (OVERVIEW_FILE, overview),
+        (BRIEF_FILE, brief),
+        (META_FILE, meta.as_str()),
+    ]
+    .map(|(name, text)| (dir.join(format!("{name}.tmp")), dir.join(name), text));
     for (temp, _, text) in &files {
         fs::write(temp, text)
             .map_err(|e| AppError::Io(format!("Cannot write {}", temp.display()), e))?;
@@ -470,27 +490,33 @@ fn save(repo: &Path, overview: &str, brief: &str) -> Result<OverviewInfo, AppErr
         fs::rename(temp, target)
             .map_err(|e| AppError::Io(format!("Cannot write {}", target.display()), e))?;
     }
-    let brief_path = dir.join(BRIEF_FILE);
-    read_info(&brief_path)
-        .map_err(|e| AppError::Io(format!("Cannot read {}", brief_path.display()), e))
+    Ok(info)
 }
 
 #[tauri::command]
 pub fn load_overview(repo_path: String) -> Result<Option<OverviewInfo>, AppError> {
     let dir = store::store_dir(Path::new(&repo_path));
-    let overview = dir.join(OVERVIEW_FILE);
-    let overview_exists = overview
-        .try_exists()
-        .map_err(|e| AppError::Io(format!("Cannot read {}", overview.display()), e))?;
-    if !overview_exists {
-        return Ok(None);
+    for name in [OVERVIEW_FILE, BRIEF_FILE] {
+        let path = dir.join(name);
+        let exists = path
+            .try_exists()
+            .map_err(|e| AppError::Io(format!("Cannot read {}", path.display()), e))?;
+        if !exists {
+            return Ok(None);
+        }
     }
-    let brief = dir.join(BRIEF_FILE);
-    match read_info(&brief) {
-        Ok(info) => Ok(Some(info)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(AppError::Io(format!("Cannot read {}", brief.display()), e)),
-    }
+    let meta = dir.join(META_FILE);
+    let text = match fs::read_to_string(&meta) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(AppError::Io(format!("Cannot read {}", meta.display()), e)),
+    };
+    serde_json::from_str(&text).map(Some).map_err(|e| {
+        AppError::Json(
+            format!("{} is damaged, regenerate the overview", meta.display()),
+            e,
+        )
+    })
 }
 
 #[tauri::command]
@@ -507,6 +533,8 @@ pub async fn generate_overview(
 
     progress(&app, "Reading files");
     let repo_dir = repo_path.clone();
+    // Empty when inferring: `select_mode` accepts no files then.
+    let selected = files.clone();
     let prompt = tauri::async_runtime::spawn_blocking(move || {
         build_user_prompt(Path::new(&repo_path), mode, files)
     })
@@ -520,6 +548,7 @@ pub async fn generate_overview(
         Path::new(&repo_dir),
         &mode.stored_overview(&overview),
         &brief,
+        &selected,
     )
 }
 
@@ -734,6 +763,16 @@ mod tests {
                 .to_string();
             assert!(error.contains(bad), "{error}");
         }
+    }
+
+    #[test]
+    fn at_most_the_file_cap_is_accepted() {
+        let names: Vec<String> = (0..=MAX_FILES).map(|i| format!("doc{i}.md")).collect();
+        let docs: Vec<DocFile> = names.iter().map(|name| doc(name)).collect();
+
+        assert!(check_selection(&docs, &names[..MAX_FILES]).is_ok());
+        let error = check_selection(&docs, &names).unwrap_err().to_string();
+        assert_eq!(error, "Select at most 5 files.");
     }
 
     #[test]
@@ -961,7 +1000,9 @@ mod tests {
         let prompt = build_inferred_prompt(dir.path()).unwrap();
 
         assert!(
-            prompt.contains("<<<MANIFEST shop/package.json>>>\n{\"name\":\"shop\"}\n<<<END MANIFEST>>>"),
+            prompt.contains(
+                "<<<MANIFEST shop/package.json>>>\n{\"name\":\"shop\"}\n<<<END MANIFEST>>>"
+            ),
             "{prompt}"
         );
         assert!(prompt.contains("- Billing: Invoices and tax\n"), "{prompt}");
@@ -1079,10 +1120,16 @@ mod tests {
     }
 
     #[test]
-    fn save_creates_the_folder_with_gitignore_and_both_files() {
+    fn save_creates_the_folder_with_gitignore_and_the_three_files() {
         let dir = tempfile::tempdir().unwrap();
 
-        let info = save(dir.path(), "overview text", "- brief").unwrap();
+        let info = save(
+            dir.path(),
+            "overview text",
+            "- brief",
+            &paths(&["README.md"]),
+        )
+        .unwrap();
 
         let store_dir = dir.path().join(".ainspector");
         assert_eq!(
@@ -1097,9 +1144,11 @@ mod tests {
             fs::read_to_string(store_dir.join(BRIEF_FILE)).unwrap(),
             "- brief"
         );
-        assert!(
-            !store_dir.join("overview.md.tmp").exists() && !store_dir.join("brief.md.tmp").exists()
-        );
+        assert!(store_dir.join(META_FILE).is_file());
+        for name in [OVERVIEW_FILE, BRIEF_FILE, META_FILE] {
+            assert!(!store_dir.join(format!("{name}.tmp")).exists(), "{name}");
+        }
+        assert_eq!(info.files, ["README.md"]);
         assert_eq!(
             load_overview(dir.path().to_string_lossy().into_owned()).unwrap(),
             Some(info)
@@ -1109,11 +1158,11 @@ mod tests {
     #[test]
     fn save_overwrites_the_old_files_and_keeps_a_custom_gitignore() {
         let dir = tempfile::tempdir().unwrap();
-        save(dir.path(), "old overview", "- old").unwrap();
+        save(dir.path(), "old overview", "- old", &[]).unwrap();
         let store_dir = dir.path().join(".ainspector");
         fs::write(store_dir.join(".gitignore"), "custom\n").unwrap();
 
-        save(dir.path(), "new overview", "- new").unwrap();
+        save(dir.path(), "new overview", "- new", &[]).unwrap();
 
         assert_eq!(
             fs::read_to_string(store_dir.join(OVERVIEW_FILE)).unwrap(),
@@ -1132,12 +1181,12 @@ mod tests {
     #[test]
     fn a_failed_write_leaves_the_old_files_untouched() {
         let dir = tempfile::tempdir().unwrap();
-        save(dir.path(), "old overview", "- old").unwrap();
+        let old = save(dir.path(), "old overview", "- old", &paths(&["old.md"])).unwrap();
         let store_dir = dir.path().join(".ainspector");
-        // A folder on the temp name makes the second temp write fail.
-        fs::create_dir(store_dir.join("brief.md.tmp")).unwrap();
+        // A folder on the temp name makes the last temp write fail.
+        fs::create_dir(store_dir.join("overview.json.tmp")).unwrap();
 
-        assert!(save(dir.path(), "new overview", "- new").is_err());
+        assert!(save(dir.path(), "new overview", "- new", &paths(&["new.md"])).is_err());
 
         assert_eq!(
             fs::read_to_string(store_dir.join(OVERVIEW_FILE)).unwrap(),
@@ -1146,6 +1195,10 @@ mod tests {
         assert_eq!(
             fs::read_to_string(store_dir.join(BRIEF_FILE)).unwrap(),
             "- old"
+        );
+        assert_eq!(
+            load_overview(dir.path().to_string_lossy().into_owned()).unwrap(),
+            Some(old)
         );
     }
 
@@ -1160,38 +1213,77 @@ mod tests {
 
     #[test]
     fn load_overview_is_none_when_one_file_is_missing() {
-        for present in [BRIEF_FILE, OVERVIEW_FILE] {
+        let all = [OVERVIEW_FILE, BRIEF_FILE, META_FILE];
+        for missing in all {
             let dir = tempfile::tempdir().unwrap();
             let store_dir = dir.path().join(".ainspector");
             fs::create_dir(&store_dir).unwrap();
-            fs::write(store_dir.join(present), "text").unwrap();
+            for present in all.into_iter().filter(|name| *name != missing) {
+                let text = if present == META_FILE {
+                    r#"{"generatedAt":"2023-11-14T22:13:20Z","files":[]}"#
+                } else {
+                    "text"
+                };
+                fs::write(store_dir.join(present), text).unwrap();
+            }
 
             assert_eq!(
                 load_overview(dir.path().to_string_lossy().into_owned()).unwrap(),
                 None,
-                "only {present}"
+                "without {missing}"
             );
         }
     }
 
-    #[test]
-    fn load_overview_reads_the_modified_time_of_the_brief() {
-        let dir = tempfile::tempdir().unwrap();
-        let store_dir = dir.path().join(".ainspector");
+    fn write_stored_overview(root: &Path, meta: &str) {
+        let store_dir = root.join(".ainspector");
         fs::create_dir(&store_dir).unwrap();
         fs::write(store_dir.join(OVERVIEW_FILE), "text").unwrap();
-        let brief = fs::File::create(store_dir.join(BRIEF_FILE)).unwrap();
-        brief
-            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
-            .unwrap();
+        fs::write(store_dir.join(BRIEF_FILE), "- text").unwrap();
+        fs::write(store_dir.join(META_FILE), meta).unwrap();
+    }
+
+    #[test]
+    fn load_overview_reads_the_meta_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write_stored_overview(
+            dir.path(),
+            r#"{"generatedAt":"2023-11-14T22:13:20Z","files":["README.md","docs/a.md"]}"#,
+        );
 
         let info = load_overview(dir.path().to_string_lossy().into_owned()).unwrap();
 
         assert_eq!(
             info,
             Some(OverviewInfo {
-                generated_at: "2023-11-14T22:13:20Z".into()
+                generated_at: "2023-11-14T22:13:20Z".into(),
+                files: paths(&["README.md", "docs/a.md"]),
             })
         );
+    }
+
+    #[test]
+    fn the_meta_file_keeps_the_selected_files_and_an_empty_list_when_inferred() {
+        for selected in [paths(&["README.md", "docs/a.md"]), vec![]] {
+            let dir = tempfile::tempdir().unwrap();
+
+            save(dir.path(), "overview", "- brief", &selected).unwrap();
+
+            let info = load_overview(dir.path().to_string_lossy().into_owned())
+                .unwrap()
+                .unwrap();
+            assert_eq!(info.files, selected);
+            assert!(info.generated_at.ends_with('Z'), "{}", info.generated_at);
+        }
+    }
+
+    #[test]
+    fn a_malformed_meta_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write_stored_overview(dir.path(), "not json");
+
+        let error = load_overview(dir.path().to_string_lossy().into_owned()).unwrap_err();
+
+        assert!(matches!(error, AppError::Json(..)), "{error}");
     }
 }

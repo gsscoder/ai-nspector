@@ -12,7 +12,22 @@ const MAX_PROMPT_TOKENS = 100_000;
 // Mirrors the backend error for documentation files that do not describe the project.
 const INSUFFICIENT_SOURCES_ERROR = "The selected files do not describe the project. Select other files.";
 
-const suggestedPaths = (docs: DocFile[]) => new Set(docs.filter((d) => d.suggested).map((d) => d.path));
+// Mirrors MAX_FILES in src-tauri/src/overview.rs; the backend enforces it too.
+const MAX_FILES = 5;
+
+const suggestedPaths = (docs: DocFile[]) =>
+  new Set(
+    docs
+      .filter((d) => d.suggested)
+      .slice(0, MAX_FILES)
+      .map((d) => d.path),
+  );
+
+// The files of the last run that still exist, or the suggested files when none remain.
+const initialPaths = (docs: DocFile[], overview: OverviewInfo | null) => {
+  const previous = docs.filter((d) => overview?.files.includes(d.path)).map((d) => d.path);
+  return previous.length > 0 ? new Set(previous) : suggestedPaths(docs);
+};
 
 export default function OverviewDialog({
   repo,
@@ -25,8 +40,8 @@ export default function OverviewDialog({
   onGenerated: (info: OverviewInfo) => void;
   onClose: () => void;
 }) {
-  // The parent mounts this dialog on every open, so the selection always starts from the suggested files.
-  const [selected, setSelected] = useState(() => suggestedPaths(repo.docs));
+  // The parent mounts this dialog on every open, so the selection always starts from the last run's files or the suggested files.
+  const [selected, setSelected] = useState(() => initialPaths(repo.docs, overview));
   const [stage, setStage] = useState<string | null>(null); // non-null while generating
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
@@ -52,6 +67,7 @@ export default function OverviewDialog({
   const files = repo.docs.filter((d) => selected.has(d.path));
   const tokens = Math.round(files.reduce((sum, d) => sum + d.size, 0) / 4);
   const overBudget = tokens > MAX_PROMPT_TOKENS;
+  const atLimit = files.length >= MAX_FILES;
 
   function toggle(path: string) {
     const next = new Set(selected);
@@ -102,6 +118,9 @@ export default function OverviewDialog({
           {overview && (
             <p className="mt-1 text-xs text-muted-foreground">Generated {new Date(overview.generatedAt).toLocaleDateString()}</p>
           )}
+          {overview && overview.files.length > 0 && (
+            <p className="mt-1 break-words text-xs text-muted-foreground">Files: {overview.files.join(", ")}</p>
+          )}
         </div>
         {noDocs ? (
           <>
@@ -148,7 +167,7 @@ export default function OverviewDialog({
                         type="checkbox"
                         className="accent-primary"
                         checked={selected.has(d.path)}
-                        disabled={generating}
+                        disabled={generating || (atLimit && !selected.has(d.path))}
                         onChange={() => toggle(d.path)}
                       />
                       <span className="min-w-0 flex-1 truncate font-mono text-xs" title={d.path}>
@@ -179,7 +198,8 @@ export default function OverviewDialog({
             )}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground tabular-nums">
-                {files.length} {files.length === 1 ? "file" : "files"} · ~{tokens} tokens
+                {files.length}/{MAX_FILES} files · ~{tokens} tokens
+                {atLimit && ` · ${MAX_FILES} files maximum`}
                 {overBudget && <span className="text-destructive"> · Too many tokens. Select fewer files.</span>}
               </p>
               <div className="flex items-center gap-2">
