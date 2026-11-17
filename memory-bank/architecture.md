@@ -61,12 +61,12 @@ create_agent_prompt → module name + file paths + chat → LLM → prompt text 
 ### Module analysis
 - One chat per module; one analysis today (`over-engineering`, review only, based on the `complexity-pruner` agent); a chat must be discarded before another analysis starts
 - Module and its file list come from the modules cache by `project_id` + `module_id`, never from the frontend
-- Request: system prompt (analysis + chat rules), then a context message: `overview.md` (omitted if absent), project structure, module files sorted by path (secondary files marked `| secondary`), then the stored chat; the context is rebuilt per call and never stored
+- Request: system prompt (analysis + chat rules), then a context message: `overview.md` (omitted if absent), project structure, module files sorted by path (secondary files marked `| secondary`; a file imported from outside the module gets `| imported by: <paths>`, sorted, at most 5, then `+N more`, derived from the structure), then the stored chat; the context is rebuilt per call and never stored
 - Over `MAX_PROMPT_TOKENS` (context + chat): drop symbols; still too large → error, nothing sent or stored; a long chat can hit this too
 - Answer is free text streamed over `chat-delta`; the first answer is the first chat message; cancel or error writes nothing, the chat file stays as before
 - Content key: FNV of path and bytes of the module files, sorted; stored in the chat file; `load_chat` computes `outdated` when it differs or a file cannot be read; an outdated chat is read-only (reply and agent prompt refused), the user discards it
 - `discard_chat` takes the run lock: fails while a generation runs
-- `create_agent_prompt`: one non-streamed call over module name, file paths and the full chat, no source text; the answer loses one code fence (`overview::unfence`); not stored, the UI holds it
+- `create_agent_prompt`: one non-streamed call over module name, file paths and the full chat, no source text; the prompt presents the kept findings as proposals with their confidence, tells the coding agent to verify each one in the code first, and asks it to report applied and skipped findings with the reason; the answer loses one code fence (`overview::unfence`); not stored, the UI holds it
 ## Storage
 - `<repo>/.ainspector/` — repo data: `modules/<project-slug>-<hash>.json` (one per project), `chats/<project-slug>-<hash>/<module-slug>-<hash>.json` (one per module: analysis id, module name, content key, model, date, messages), `overview.md`, `brief.md`
   - On first create writes `.ainspector/.gitignore` with `*`; the repo's own `.gitignore` is never edited
