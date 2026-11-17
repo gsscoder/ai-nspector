@@ -1,6 +1,6 @@
 # ai-nspector
 
-A desktop app that helps you understand a code repository you did not write. This is more and more often AI-generated code.
+An AI-powered code inspector for desktop. Use it on your own repository or to explore a new one. More and more code is AI-generated, and this app helps you see what is in it.
 
 Open a repository. The app finds its projects, asks an LLM to split a project into logical modules, and lets you read the files of each module.
 
