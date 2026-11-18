@@ -1,12 +1,12 @@
-# ai-nspector
+# AI-nspector
+
+![version](https://img.shields.io/badge/version-0.1.0-blue)
 
 An AI-powered code inspector for desktop. Use it on your own repository or to explore a new one. More and more code is AI-generated, and this app helps you see what is in it.
 
 Open a repository. The app finds its projects, asks an LLM to split a project into logical modules, and lets you read the files of each module.
 
-> **Version:** 0.1.0
->
-> **Status:** early MVP. The code is written and covered by unit tests. It is not yet verified end to end with a real LLM, and the Linux build is not yet verified.
+![Demo](docs/demo.gif)
 
 ## Why
 
