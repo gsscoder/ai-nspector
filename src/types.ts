@@ -1,7 +1,7 @@
 // Shared TypeScript types mirroring the Rust structs in src-tauri/src/scan.rs.
 export type Language = "python" | "dotnet" | "typescript" | "other";
 
-export type Role = "backend" | "frontend" | "unknown";
+export type Role = "backend" | "frontend" | "test" | "unknown";
 
 // Paths are relative to the repo root and use forward slashes.
 export interface Project {

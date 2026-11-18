@@ -68,7 +68,7 @@ The development documents are in the `memory-bank` dir — they primarily focus 
 - Review/audit/report requests end at the report; fixing findings needs its own separate request — authorization never carries across turns
 - NEVER update this file
 - NEVER modify `*.md` files in `memory-bank` (at any depth in the dir tree) without an explicit request
-- NEVER commit changes to Git history without explicit authorization
+- NEVER commit changes to Git history without explicit authorization; do not suggest committing changes
  
 ## Guardrails
 Where a request conflicts with a guardrail, follow the guardrail and say why.

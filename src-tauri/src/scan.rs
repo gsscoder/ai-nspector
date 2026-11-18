@@ -60,6 +60,13 @@ const BACKEND_PACKAGES: [&str; 7] = [
     "nuxt",
 ];
 const BACKEND_PYTHON: [&str; 3] = ["fastapi", "flask", "django"];
+const TEST_FOLDERS: [&str; 3] = ["test", "tests", "e2e"];
+const TEST_FOLDER_SUFFIXES: [&str; 6] = [".tests", ".test", "-tests", "-test", "_tests", "_test"];
+const DOTNET_TEST_MARKERS: [&str; 3] = [
+    "Microsoft.NET.Test.Sdk",
+    "MSTest.Sdk",
+    "<IsTestProject>true",
+];
 const OTHER_PROJECT_ID: &str = "(other)";
 const OTHER_PROJECT_NAME: &str = "(other files)";
 const RECENT_REPOS_FILE: &str = "recent_repos.json";
@@ -74,12 +81,14 @@ pub enum Language {
     Other,
 }
 
-/// Read from the manifest content only; `Unknown` when the signals are absent or mixed.
+/// Read from the manifest content; `Test` also from the folder name; `Unknown` when the signals
+/// are absent or mixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Backend,
     Frontend,
+    Test,
     Unknown,
 }
 
@@ -249,7 +258,8 @@ fn walk_repo(root: &Path, repo_name: &str) -> Walked {
                     path: path.clone(),
                     language,
                 });
-                let role = detect_role(&file_name, &read_manifest(entry.path()));
+                let role =
+                    detect_role(&file_name, parent_dir(&path), &read_manifest(entry.path()));
                 walked.manifests.push(Manifest::new(
                     path, &file_name, language, role, priority, repo_name,
                 ));
@@ -364,7 +374,10 @@ fn read_manifest(path: &Path) -> String {
 }
 
 // ponytail: plain name match, no version or script check; a mixed signal gives `Unknown`.
-fn detect_role(file_name: &str, text: &str) -> Role {
+fn detect_role(file_name: &str, dir: &str, text: &str) -> Role {
+    if is_test_project(file_name, dir, text) {
+        return Role::Test;
+    }
     let (frontend, backend) = match file_name {
         "package.json" => {
             let json: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
@@ -390,6 +403,16 @@ fn detect_role(file_name: &str, text: &str) -> Role {
         (false, true) => Role::Backend,
         _ => Role::Unknown,
     }
+}
+
+// ponytail: only .NET has a test marker in the manifest; Python and JS/TS test projects are
+// found by folder name, a test-only package elsewhere keeps its dependency role.
+fn is_test_project(file_name: &str, dir: &str, text: &str) -> bool {
+    let folder = dir.rsplit('/').next().unwrap_or(dir).to_lowercase();
+    TEST_FOLDERS.contains(&folder.as_str())
+        || TEST_FOLDER_SUFFIXES.iter().any(|suffix| folder.ends_with(suffix))
+        || (file_name.ends_with(".csproj")
+            && DOTNET_TEST_MARKERS.iter().any(|marker| text.contains(marker)))
 }
 
 fn source_language(file_name: &str) -> Option<Language> {
@@ -618,6 +641,50 @@ mod tests {
         assert_eq!(
             role_of("A.csproj", r#"<Project Sdk="Microsoft.NET.Sdk"></Project>"#),
             Role::Unknown
+        );
+    }
+
+    #[test]
+    fn test_role_comes_from_folder_name_or_dotnet_test_sdk() {
+        let test_sdk = r#"<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup>
+            <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17" />
+            </ItemGroup></Project>"#;
+        assert_eq!(role_of("A.csproj", test_sdk), Role::Test);
+        assert_eq!(
+            role_of("A.csproj", r#"<Project Sdk="MSTest.Sdk/3.6.4"></Project>"#),
+            Role::Test
+        );
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        write_files(
+            dir.path(),
+            &[
+                "app/pyproject.toml",
+                "app/m.py",
+                "tests/requirements.txt",
+                "tests/t.py",
+                "web/e2e/package.json",
+                "web/e2e/a.ts",
+                "src/Api.Tests/Api.Tests.csproj",
+                "src/Api.Tests/T.cs",
+                "latest/package.json",
+                "latest/a.ts",
+            ],
+        );
+        let roles: Vec<(String, Role)> = scan_repo(dir.path())
+            .unwrap()
+            .projects
+            .into_iter()
+            .map(|p| (p.id, p.role))
+            .collect();
+        assert_eq!(
+            roles,
+            vec![
+                ("app/pyproject.toml".to_string(), Role::Unknown),
+                ("latest/package.json".to_string(), Role::Unknown),
+                ("src/Api.Tests/Api.Tests.csproj".to_string(), Role::Test),
+                ("tests/requirements.txt".to_string(), Role::Test),
+                ("web/e2e/package.json".to_string(), Role::Test),
+            ]
         );
     }
 

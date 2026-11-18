@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { ArrowLeft, ScanSearch, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Notice from "@/components/Notice";
@@ -17,7 +18,13 @@ function App() {
   // undefined: not known yet or the load failed.
   const [llmConfigured, setLlmConfigured] = useState<boolean | undefined>(undefined);
   const [llmNoticeDismissed, setLlmNoticeDismissed] = useState(false);
+  // Only a label: when the read fails, the header shows no version.
+  const [version, setVersion] = useState<string | null>(null);
   const repoRoot = repo?.root;
+
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => setVersion(null));
+  }, []);
 
   useEffect(() => {
     setOverview(undefined);
@@ -53,6 +60,7 @@ function App() {
         <h1 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
           <ScanSearch className="size-4 text-primary" />
           ai-nspector
+          {version !== null && <span className="font-normal text-muted-foreground tabular-nums">v{version}</span>}
         </h1>
         <Button
           variant="ghost"

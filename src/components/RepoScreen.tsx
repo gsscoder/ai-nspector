@@ -1,5 +1,16 @@
 import { useState } from "react";
-import { BookOpen, ChevronDown, ChevronRight, FolderGit2, X } from "lucide-react";
+import {
+  AppWindow,
+  BookOpen,
+  ChevronDown,
+  ChevronRight,
+  CircleQuestionMark,
+  FlaskConical,
+  FolderGit2,
+  Server,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -11,7 +22,19 @@ import ModuleView from "@/components/ModuleView";
 import OverviewDialog from "@/components/OverviewDialog";
 import ProjectView from "@/components/ProjectView";
 import { STACK, projectLabel } from "@/lib/project";
-import type { ModulesFile, OverviewInfo, Repo } from "@/types";
+import type { ModulesFile, OverviewInfo, Repo, Role } from "@/types";
+
+const ROLE_ICON: Record<Role, LucideIcon> = {
+  backend: Server,
+  frontend: AppWindow,
+  test: FlaskConical,
+  unknown: CircleQuestionMark,
+};
+
+function RoleIcon({ role }: { role: Role }) {
+  const Icon = ROLE_ICON[role];
+  return <Icon role="img" aria-label={`${role} project`} className="size-4 shrink-0 text-muted-foreground" />;
+}
 
 function Crumb({
   label,
@@ -129,7 +152,10 @@ export default function RepoScreen({
                 className="rounded-xl border bg-card p-4 text-left outline-none transition-colors hover:border-foreground/20 hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                 onClick={() => setProjectId(p.id)}
               >
-                <div className="font-medium">{projectLabel(p)}</div>
+                <div className="flex items-center gap-2 font-medium">
+                  <RoleIcon role={p.role} />
+                  {projectLabel(p)}
+                </div>
                 <div className="truncate text-sm text-muted-foreground">{p.root === "" ? "repo root" : p.root}</div>
                 <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="rounded-md bg-muted px-1.5 py-0.5 font-medium text-foreground/80">{STACK[p.language]}</span>

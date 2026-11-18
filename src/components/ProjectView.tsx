@@ -100,7 +100,7 @@ export default function ProjectView({
           ) : (
             <Button variant={data ? "outline" : "default"} onClick={generate}>
               <Sparkles />
-              {data ? "Regenerate" : "Generate modules"}
+              {data ? "Identify again" : "Identify modules"}
             </Button>
           )}
         </div>
@@ -114,7 +114,7 @@ export default function ProjectView({
       {!data && !generating && !error && (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed p-12 text-center">
           <Boxes className="size-6 text-muted-foreground/60" />
-          <p className="text-sm text-muted-foreground">No modules yet. Generate them to see how this project is organized.</p>
+          <p className="text-sm text-muted-foreground">No modules yet. Identify them to see how this project is organized.</p>
         </div>
       )}
       {data && (
