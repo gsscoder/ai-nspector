@@ -97,14 +97,6 @@ cd src-tauri && cargo test --lib    # Rust unit tests
 npx tsc --noEmit                    # type check the frontend
 ```
 
-## Project docs
-
-The `.agent-files/` folder holds the design documents. They are written for AI coding agents.
-
-- [`intent.md`](.agent-files/intent.md): why the app exists and what it should do
-- [`spec.md`](.agent-files/spec.md): technical decisions
-- [`plan.md`](.agent-files/plan.md): implementation plan and status
-
 ## Known limits
 
 - The prompt budget is fixed at about 100,000 tokens. A very large project gives an error. Batch splitting is not built yet.
@@ -114,4 +106,4 @@ The `.agent-files/` folder holds the design documents. They are written for AI c
 
 ## License
 
-No license file yet. Add one before you share the code.
+MIT © [koder0x](https://github.com/gsscoder)
