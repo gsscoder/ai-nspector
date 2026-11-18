@@ -64,6 +64,7 @@ The development documents are in the `memory-bank` dir — they primarily focus 
 - Never suppress compiler warnings or use broad lint allowances; enforce idiomatic Rust with `clippy`, `rustfmt`, and strict compiler lints (`#![deny(warnings)`] where appropriate)
 
 ## Operational Rules
+- For complex requests, start by reading file `memory-bank/architecture.md` before analyzing any code
 - Read files in `memory-bank` only when required by the current task; scan filenames first and read file contents only if they are relevant to the task
 - Review/audit/report requests end at the report; fixing findings needs its own separate request — authorization never carries across turns
 - NEVER update this file

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Boxes, Sparkles } from "lucide-react";
+import { Boxes, LayoutGrid, Network, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import LlmHint from "@/components/LlmHint";
+import ModuleGraph from "@/components/ModuleGraph";
 import { cancelGeneration, generateModules, loadModules, onModulesProgress } from "@/api";
 import { useLlmBlocked } from "@/lib/llmConfigured";
 import { projectLabel } from "@/lib/project";
@@ -10,6 +11,12 @@ import type { ModulesFile, Project } from "@/types";
 // Backend texts about the LLM server, the network or the API key store (see error.rs, llm.rs, settings.rs).
 // The "Set the ... in Settings." messages already name Settings.
 const LLM_CONNECTION_ERROR = /LLM server|Network error|HTTP client|credential store/;
+
+type View = "cards" | "graph";
+const VIEWS: { value: View; label: string; Icon: typeof Network }[] = [
+  { value: "cards", label: "Cards", Icon: LayoutGrid },
+  { value: "graph", label: "Graph", Icon: Network },
+];
 
 export default function ProjectView({
   repoRoot,
@@ -27,6 +34,7 @@ export default function ProjectView({
   const [stage, setStage] = useState<string | null>(null); // non-null while generating
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
+  const [view, setView] = useState<View>("cards");
   const llmBlocked = useLlmBlocked();
   const mounted = useRef(false); // a run that outlives this view must not touch the shared state
   const unlisten = useRef<(() => void) | null>(null);
@@ -124,6 +132,27 @@ export default function ProjectView({
         </div>
       )}
       {data && (
+        <div role="group" aria-label="Module view" className="flex w-fit gap-0.5 rounded-lg border bg-card p-0.5">
+          {VIEWS.map(({ value, label, Icon }) => (
+            <Button
+              key={value}
+              type="button"
+              size="sm"
+              variant={view === value ? "secondary" : "ghost"}
+              className={view === value ? "" : "text-muted-foreground"}
+              aria-pressed={view === value}
+              onClick={() => setView(value)}
+            >
+              <Icon />
+              {label}
+            </Button>
+          ))}
+        </div>
+      )}
+      {data && view === "graph" && (
+        <ModuleGraph repoRoot={repoRoot} projectId={project.id} modules={data.modules} onOpenModule={onOpenModule} />
+      )}
+      {data && view === "cards" && (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {data.modules.map((m) => (
             <button

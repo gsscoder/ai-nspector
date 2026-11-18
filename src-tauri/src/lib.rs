@@ -21,6 +21,7 @@ pub fn run() -> tauri::Result<()> {
             scan::list_recent_repos,
             files::read_file,
             modules::load_modules,
+            modules::module_relations,
             modules::generate_modules,
             modules::cancel_generation,
             overview::load_overview,

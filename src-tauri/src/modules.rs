@@ -1,6 +1,6 @@
 //! Module generation: prompt from the project structure, LLM call, validation, cache.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::mem;
@@ -62,6 +62,14 @@ struct Progress {
 
 pub(crate) fn progress(app: &AppHandle, stage: &'static str) {
     let _ = app.emit("modules-progress", Progress { stage });
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleRelation {
+    from: String,
+    to: String,
+    count: usize,
 }
 
 #[derive(Deserialize)]
@@ -264,6 +272,63 @@ pub async fn load_modules(
     .map_err(|e| AppError::Platform("Loading did not finish".into(), e.into()))?
 }
 
+/// Counts file imports that cross a module boundary, sorted by `from`, then `to`.
+/// Edges with a file that has no module, and edges inside one module, are skipped.
+fn count_relations<'a>(
+    module_of: &HashMap<&str, &'a str>,
+    edges: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Vec<ModuleRelation> {
+    let mut counts: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for (from_file, to_file) in edges {
+        let (Some(&from), Some(&to)) = (module_of.get(from_file), module_of.get(to_file)) else {
+            continue;
+        };
+        if from != to {
+            *counts.entry((from, to)).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .map(|((from, to), count)| ModuleRelation {
+            from: from.into(),
+            to: to.into(),
+            count,
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn module_relations(
+    repo_path: String,
+    project_id: String,
+) -> Result<Vec<ModuleRelation>, AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Path::new(&repo_path);
+        let Some(cached) = store::load(repo, &project_id)? else {
+            return Ok(Vec::new());
+        };
+        let project = find_project(repo, &project_id)?;
+        let structure = analyze_project(repo, &project.files).map_err(AppError::Invalid)?;
+        let module_of: HashMap<&str, &str> = cached
+            .modules
+            .iter()
+            .flat_map(|m| {
+                m.files
+                    .iter()
+                    .filter(|f| f.primary)
+                    .map(|f| (f.path.as_str(), m.id.as_str()))
+            })
+            .collect();
+        let edges = structure
+            .files
+            .iter()
+            .flat_map(|f| f.imports.iter().map(|to| (f.path.as_str(), to.as_str())));
+        Ok(count_relations(&module_of, edges))
+    })
+    .await
+    .map_err(|e| AppError::Platform("Loading relations did not finish".into(), e.into()))?
+}
+
 #[tauri::command]
 pub fn cancel_generation() {
     CANCEL.store(true, Ordering::SeqCst);
@@ -409,6 +474,24 @@ mod tests {
         };
         assert_eq!((primaries("x.ts"), primaries("y.ts")), (1, 1));
         assert_ne!(modules[0].id, modules[1].id);
+    }
+
+    #[test]
+    fn relations_count_cross_module_imports_only() {
+        let module_of = HashMap::from([("a1", "a"), ("a2", "a"), ("b1", "b")]);
+        let edges = [
+            ("a1", "b1"),
+            ("a2", "b1"),
+            ("a1", "a2"), // same module
+            ("b1", "a1"),
+            ("a1", "ghost"), // file without a module
+        ];
+        let relations = count_relations(&module_of, edges);
+        let got: Vec<_> = relations
+            .iter()
+            .map(|r| (r.from.as_str(), r.to.as_str(), r.count))
+            .collect();
+        assert_eq!(got, [("a", "b", 2), ("b", "a", 1)]);
     }
 
     #[test]

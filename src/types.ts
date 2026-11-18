@@ -49,6 +49,13 @@ export interface ModulesFile {
   outdated: boolean;
 }
 
+// from imports to: one module imports another; count is the number of file imports.
+export interface ModuleRelation {
+  from: string;
+  to: string;
+  count: number;
+}
+
 // Mirrors the struct in src-tauri/src/overview.rs. generatedAt is RFC 3339.
 export interface OverviewInfo {
   generatedAt: string;
