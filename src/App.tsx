@@ -6,6 +6,7 @@ import Notice from "@/components/Notice";
 import RepoView from "@/components/RepoView";
 import Settings from "@/components/Settings";
 import { loadOverview } from "@/api";
+import { LlmConfiguredContext } from "@/lib/llmConfigured";
 import { getSettings } from "@/settingsApi";
 import type { OverviewInfo, Repo } from "@/types";
 
@@ -73,25 +74,29 @@ function App() {
         </Button>
       </header>
       {!showSettings && llmConfigured === false && !llmNoticeDismissed && (
-        <Notice onDismiss={() => setLlmNoticeDismissed(true)}>
-          The LLM is not configured. Open Settings and set the base URL and the model.
+        <Notice tone="error" onDismiss={() => setLlmNoticeDismissed(true)}>
+          The LLM is not configured. Core features need the AI and do not work until you set the base URL and the model
+          in Settings.
         </Notice>
       )}
       {repo !== null && overview === null && overviewNoticeDismissedFor !== repo && (
-        <Notice onDismiss={() => setOverviewNoticeDismissedFor(repo)}>
-          This repo has no overview yet. Use the Overview button to create brief.md and overview.md.
+        <Notice tone="warning" onDismiss={() => setOverviewNoticeDismissedFor(repo)}>
+          This repo has no overview yet. AI answers will be less precise. Use the Overview button to create brief.md and
+          overview.md.
         </Notice>
       )}
       <main className="flex flex-1 flex-col overflow-auto p-6">
         <div className="mx-auto min-h-0 w-full max-w-7xl flex-1">
           <div className={showSettings ? "hidden" : "h-full"}>
-            <RepoView
-              repo={repo}
-              overview={overview}
-              onOpen={setRepo}
-              onOverviewChange={setOverview}
-              onClose={() => setRepo(null)}
-            />
+            <LlmConfiguredContext.Provider value={llmConfigured}>
+              <RepoView
+                repo={repo}
+                overview={overview}
+                onOpen={setRepo}
+                onOverviewChange={setOverview}
+                onClose={() => setRepo(null)}
+              />
+            </LlmConfiguredContext.Provider>
           </div>
           {showSettings && <Settings onSaved={refreshLlmConfigured} />}
         </div>

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Boxes, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import LlmHint from "@/components/LlmHint";
 import { cancelGeneration, generateModules, loadModules, onModulesProgress } from "@/api";
+import { useLlmBlocked } from "@/lib/llmConfigured";
 import { projectLabel } from "@/lib/project";
 import type { ModulesFile, Project } from "@/types";
 
@@ -25,6 +27,7 @@ export default function ProjectView({
   const [stage, setStage] = useState<string | null>(null); // non-null while generating
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
+  const llmBlocked = useLlmBlocked();
   const mounted = useRef(false); // a run that outlives this view must not touch the shared state
   const unlisten = useRef<(() => void) | null>(null);
 
@@ -98,10 +101,13 @@ export default function ProjectView({
               </Button>
             </>
           ) : (
-            <Button variant={data ? "outline" : "default"} onClick={generate}>
-              <Sparkles />
-              {data ? "Identify again" : "Identify modules"}
-            </Button>
+            <>
+              <LlmHint />
+              <Button variant={data ? "outline" : "default"} disabled={llmBlocked} onClick={generate}>
+                <Sparkles />
+                {data ? "Identify again" : "Identify modules"}
+              </Button>
+            </>
           )}
         </div>
       </div>

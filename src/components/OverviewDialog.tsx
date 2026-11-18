@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Info, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import LlmHint from "@/components/LlmHint";
 import { cancelGeneration, generateOverview, onModulesProgress } from "@/api";
+import { useLlmBlocked } from "@/lib/llmConfigured";
 import { splitPath } from "@/lib/project";
 import type { DocFile, OverviewInfo, Repo } from "@/types";
 
@@ -45,6 +47,7 @@ export default function OverviewDialog({
   const [stage, setStage] = useState<string | null>(null); // non-null while generating
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
+  const llmBlocked = useLlmBlocked();
   const mounted = useRef(false); // a run that outlives this dialog must not touch the parent state
   const unlisten = useRef<(() => void) | null>(null);
 
@@ -131,11 +134,12 @@ export default function OverviewDialog({
             )}
             <div className="flex items-center gap-2 self-end">
               {generating && progress}
+              <LlmHint />
               <Button variant="outline" onClick={generating ? cancelGeneration : onClose}>
                 Cancel
               </Button>
               {!generating && (
-                <Button onClick={() => generate(true)}>
+                <Button disabled={llmBlocked} onClick={() => generate(true)}>
                   <Sparkles />
                   {overview ? "Regenerate" : "Generate"}
                 </Button>
@@ -190,7 +194,7 @@ export default function OverviewDialog({
                   {error}
                 </p>
                 {error === INSUFFICIENT_SOURCES_ERROR && (
-                  <Button variant="outline" size="sm" disabled={generating} onClick={() => generate(true)}>
+                  <Button variant="outline" size="sm" disabled={generating || llmBlocked} onClick={() => generate(true)}>
                     Infer from structure
                   </Button>
                 )}
@@ -203,6 +207,7 @@ export default function OverviewDialog({
                 {overBudget && <span className="text-destructive"> · Too many tokens. Select fewer files.</span>}
               </p>
               <div className="flex items-center gap-2">
+                <LlmHint />
                 {generating ? (
                   <>
                     {progress}
@@ -211,7 +216,7 @@ export default function OverviewDialog({
                     </Button>
                   </>
                 ) : (
-                  <Button disabled={files.length === 0 || overBudget} onClick={() => generate(false)}>
+                  <Button disabled={files.length === 0 || overBudget || llmBlocked} onClick={() => generate(false)}>
                     <Sparkles />
                     {overview ? "Regenerate" : "Generate"}
                   </Button>

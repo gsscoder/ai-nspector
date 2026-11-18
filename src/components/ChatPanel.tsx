@@ -3,6 +3,8 @@ import { ChevronDown, ChevronRight, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import GenerationProgress from "@/components/GenerationProgress";
+import LlmHint from "@/components/LlmHint";
+import { useLlmBlocked } from "@/lib/llmConfigured";
 import type { ChatFile, ChatMessage } from "@/types";
 
 // The turn the backend is answering: the user message (null for the first analysis) and the streamed reply so far.
@@ -44,13 +46,14 @@ export default function ChatPanel({
   const [discarding, setDiscarding] = useState(false);
   const [discardError, setDiscardError] = useState<string | null>(null);
   const log = useRef<HTMLDivElement>(null);
+  const llmBlocked = useLlmBlocked();
 
   useEffect(() => {
     const el = log.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [chat, pending, open]);
 
-  const locked = progress !== null || chat === null || chat.outdated;
+  const locked = progress !== null || chat === null || chat.outdated || llmBlocked;
 
   async function send() {
     const question = text.trim();
@@ -122,6 +125,7 @@ export default function ChatPanel({
               The module files changed. Discard the chat and run the analysis again.
             </p>
           )}
+          <LlmHint className="px-4 pb-2" />
           <div className="flex items-end gap-2 border-t p-3">
             <textarea
               className="field min-h-16 resize-none py-1.5"

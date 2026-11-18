@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { PanelRightClose, PanelRightOpen, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import LlmHint from "@/components/LlmHint";
+import { useLlmBlocked } from "@/lib/llmConfigured";
 import type { AnalysisInfo, ChatFile } from "@/types";
 
 export default function AnalysisPanel({
@@ -19,6 +21,7 @@ export default function AnalysisPanel({
   onOpenChat: () => void;
 }) {
   const [open, setOpen] = useState(true);
+  const llmBlocked = useLlmBlocked();
 
   if (!open) {
     return (
@@ -38,6 +41,7 @@ export default function AnalysisPanel({
       {overviewMissing && (
         <p className="mb-2 text-xs text-muted-foreground">Generate the repo overview for better results.</p>
       )}
+      <LlmHint className="mb-2" />
       <ul className="flex flex-col gap-2">
         {analyses.map((a) => {
           const hasChat = chat?.analysis === a.id;
@@ -49,7 +53,7 @@ export default function AnalysisPanel({
                 className="mt-3"
                 variant={hasChat ? "outline" : "default"}
                 size="sm"
-                disabled={!hasChat && (chat !== null || running)}
+                disabled={!hasChat && (chat !== null || running || llmBlocked)}
                 onClick={hasChat ? onOpenChat : () => onRun(a.id)}
               >
                 {!hasChat && <Play />}

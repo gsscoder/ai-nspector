@@ -3,6 +3,8 @@ import { Check, Copy, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import GenerationProgress from "@/components/GenerationProgress";
+import LlmHint from "@/components/LlmHint";
+import { useLlmBlocked } from "@/lib/llmConfigured";
 
 export default function AgentPromptDialog({
   prompt,
@@ -22,6 +24,7 @@ export default function AgentPromptDialog({
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const generating = progress !== null;
+  const llmBlocked = useLlmBlocked();
   const shownError = copyError ?? error;
 
   useEffect(() => {
@@ -66,7 +69,8 @@ export default function AgentPromptDialog({
             <GenerationProgress stage={progress.stage} seconds={progress.seconds} />
           ) : (
             <>
-              <Button variant="outline" onClick={onRegenerate}>
+              <LlmHint />
+              <Button variant="outline" disabled={llmBlocked} onClick={onRegenerate}>
                 <Sparkles />
                 {prompt === null ? "Generate" : "Regenerate"}
               </Button>
