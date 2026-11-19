@@ -2,7 +2,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { AnalysisInfo, ChatFile, ModuleRelation, ModulesFile, OverviewInfo, Repo } from "@/types";
+import type {
+  AnalysisInfo,
+  ChatFile,
+  ModuleRelation,
+  ModulesFile,
+  OverviewInfo,
+  ProjectAnalysisProgress,
+  ProjectReport,
+  Repo,
+} from "@/types";
 
 export const openRepo = (path: string) => invoke<Repo>("open_repo", { path });
 
@@ -39,6 +48,9 @@ export const loadChat = (repoPath: string, projectId: string, moduleId: string) 
 export const startAnalysis = (repoPath: string, projectId: string, moduleId: string, analysisId: string) =>
   invoke<ChatFile>("start_analysis", { repoPath, projectId, moduleId, analysisId });
 
+export const startProjectAnalysis = (repoPath: string, projectId: string, analysisId: string, moduleIds: string[]) =>
+  invoke<ProjectReport>("start_project_analysis", { repoPath, projectId, analysisId, moduleIds });
+
 export const sendChatMessage = (repoPath: string, projectId: string, moduleId: string, text: string) =>
   invoke<ChatFile>("send_chat_message", { repoPath, projectId, moduleId, text });
 
@@ -48,9 +60,16 @@ export const discardChat = (repoPath: string, projectId: string, moduleId: strin
 export const createAgentPrompt = (repoPath: string, projectId: string, moduleId: string) =>
   invoke<string>("create_agent_prompt", { repoPath, projectId, moduleId });
 
+export const createProjectAgentPrompt = (repoPath: string, projectId: string, findings: { moduleId: string; text: string }[]) =>
+  invoke<string>("create_project_agent_prompt", { repoPath, projectId, findings });
+
 // Returns the unlisten function.
 export const onChatDelta = (cb: (text: string) => void) =>
   listen<{ text: string }>("chat-delta", (e) => cb(e.payload.text));
+
+// Returns the unlisten function.
+export const onProjectAnalysisProgress = (cb: (progress: ProjectAnalysisProgress) => void) =>
+  listen<ProjectAnalysisProgress>("project-analysis-progress", (e) => cb(e.payload));
 
 export const readFile = (repoPath: string, path: string) =>
   invoke<string>("read_file", { repoPath, path });

@@ -82,3 +82,27 @@ export interface ChatFile {
   messages: ChatMessage[];
   outdated: boolean;
 }
+
+// Report of one analysis run over several modules of a project. createdAt is RFC 3339.
+export interface ModuleReport {
+  moduleId: string;
+  moduleName: string;
+  status: "done" | "nothingFound" | "failed";
+  text: string;
+  error: string | null;
+}
+
+export interface ProjectReport {
+  analysis: string;
+  model: string;
+  createdAt: string;
+  cancelled: boolean;
+  modules: ModuleReport[];
+}
+
+// Payload of the project-analysis-progress event; index is 1-based.
+export interface ProjectAnalysisProgress {
+  index: number;
+  total: number;
+  moduleName: string;
+}

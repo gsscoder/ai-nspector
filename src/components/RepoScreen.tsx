@@ -172,6 +172,7 @@ export default function RepoScreen({
           key={project.id}
           repoRoot={repo.root}
           project={project}
+          overview={overview}
           data={data}
           setData={setData}
           onOpenModule={setModuleId}

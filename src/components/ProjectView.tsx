@@ -3,10 +3,12 @@ import { Boxes, LayoutGrid, Network, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import LlmHint from "@/components/LlmHint";
 import ModuleGraph from "@/components/ModuleGraph";
-import { cancelGeneration, generateModules, loadModules, onModulesProgress } from "@/api";
+import ProjectAnalysisPanel from "@/components/ProjectAnalysisPanel";
+import ProjectReportView from "@/components/ProjectReportView";
+import { cancelGeneration, generateModules, listAnalyses, loadModules, onModulesProgress } from "@/api";
 import { useLlmBlocked } from "@/lib/llmConfigured";
 import { projectLabel } from "@/lib/project";
-import type { ModulesFile, Project } from "@/types";
+import type { AnalysisInfo, ModulesFile, OverviewInfo, Project, ProjectReport } from "@/types";
 
 // Backend texts about the LLM server, the network or the API key store (see error.rs, llm.rs, settings.rs).
 // The "Set the ... in Settings." messages already name Settings.
@@ -21,12 +23,14 @@ const VIEWS: { value: View; label: string; Icon: typeof Network }[] = [
 export default function ProjectView({
   repoRoot,
   project,
+  overview,
   onOpenModule,
   data,
   setData,
 }: {
   repoRoot: string;
   project: Project;
+  overview: OverviewInfo | null | undefined;
   onOpenModule: (id: string) => void;
   data: ModulesFile | null;
   setData: (d: ModulesFile | null) => void;
@@ -35,6 +39,8 @@ export default function ProjectView({
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
   const [view, setView] = useState<View>("cards");
+  const [analyses, setAnalyses] = useState<AnalysisInfo[]>([]);
+  const [finished, setFinished] = useState<{ report: ProjectReport; requested: number } | null>(null);
   const llmBlocked = useLlmBlocked();
   const mounted = useRef(false); // a run that outlives this view must not touch the shared state
   const unlisten = useRef<(() => void) | null>(null);
@@ -49,6 +55,16 @@ export default function ProjectView({
       stale = true;
     };
   }, [repoRoot, project.id, setData]);
+
+  useEffect(() => {
+    let stale = false;
+    listAnalyses()
+      .then((list) => !stale && setAnalyses(list))
+      .catch((e) => !stale && setError(String(e)));
+    return () => {
+      stale = true;
+    };
+  }, []);
 
   const generating = stage !== null;
   useEffect(() => {
@@ -132,41 +148,69 @@ export default function ProjectView({
         </div>
       )}
       {data && (
-        <div role="group" aria-label="Module view" className="flex w-fit gap-0.5 rounded-lg border bg-card p-0.5">
-          {VIEWS.map(({ value, label, Icon }) => (
-            <Button
-              key={value}
-              type="button"
-              size="sm"
-              variant={view === value ? "secondary" : "ghost"}
-              className={view === value ? "" : "text-muted-foreground"}
-              aria-pressed={view === value}
-              onClick={() => setView(value)}
-            >
-              <Icon />
-              {label}
-            </Button>
-          ))}
-        </div>
-      )}
-      {data && view === "graph" && (
-        <ModuleGraph repoRoot={repoRoot} projectId={project.id} modules={data.modules} onOpenModule={onOpenModule} />
-      )}
-      {data && view === "cards" && (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {data.modules.map((m) => (
-            <button
-              key={m.id}
-              className="flex flex-col rounded-xl border bg-card p-4 text-left outline-none transition-colors hover:border-foreground/20 hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-              onClick={() => onOpenModule(m.id)}
-            >
-              <div className="font-medium">{m.name}</div>
-              <div className="mt-1 text-sm text-muted-foreground">{m.purpose}</div>
-              <div className="mt-auto pt-3 text-xs text-muted-foreground">
-                {m.files.length} {m.files.length === 1 ? "file" : "files"}
+        <div className="flex items-start gap-6">
+          <div className="flex min-w-0 flex-1 flex-col gap-4">
+            <div role="group" aria-label="Module view" className="flex w-fit gap-0.5 rounded-lg border bg-card p-0.5">
+              {VIEWS.map(({ value, label, Icon }) => (
+                <Button
+                  key={value}
+                  type="button"
+                  size="sm"
+                  variant={view === value ? "secondary" : "ghost"}
+                  className={view === value ? "" : "text-muted-foreground"}
+                  aria-pressed={view === value}
+                  onClick={() => setView(value)}
+                >
+                  <Icon />
+                  {label}
+                </Button>
+              ))}
+            </div>
+            {view === "graph" && (
+              <ModuleGraph
+                repoRoot={repoRoot}
+                projectId={project.id}
+                modules={data.modules}
+                onOpenModule={onOpenModule}
+              />
+            )}
+            {view === "cards" && (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {data.modules.map((m) => (
+                  <button
+                    key={m.id}
+                    className="flex flex-col rounded-xl border bg-card p-4 text-left outline-none transition-colors hover:border-foreground/20 hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    onClick={() => onOpenModule(m.id)}
+                  >
+                    <div className="font-medium">{m.name}</div>
+                    <div className="mt-1 text-sm text-muted-foreground">{m.purpose}</div>
+                    <div className="mt-auto pt-3 text-xs text-muted-foreground">
+                      {m.files.length} {m.files.length === 1 ? "file" : "files"}
+                    </div>
+                  </button>
+                ))}
               </div>
-            </button>
-          ))}
+            )}
+            {finished && (
+              <ProjectReportView
+                key={finished.report.createdAt}
+                repoRoot={repoRoot}
+                projectId={project.id}
+                report={finished.report}
+                analysisName={analyses.find((a) => a.id === finished.report.analysis)?.name ?? finished.report.analysis}
+                requested={finished.requested}
+                onClose={() => setFinished(null)}
+              />
+            )}
+          </div>
+          <ProjectAnalysisPanel
+            repoRoot={repoRoot}
+            projectId={project.id}
+            modules={data.modules}
+            analyses={analyses}
+            overviewMissing={overview === null}
+            onReport={(report, requested) => setFinished({ report, requested })}
+          />
         </div>
       )}
     </section>

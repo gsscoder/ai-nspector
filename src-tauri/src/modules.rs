@@ -106,7 +106,7 @@ pub(crate) fn user_prompt(structure: &ProjectStructure, with_symbols: bool) -> S
 }
 
 /// Repo brief written by the overview step; a missing, empty or blank file means no brief.
-fn read_brief(repo: &Path) -> Result<Option<String>, AppError> {
+pub(crate) fn read_brief(repo: &Path) -> Result<Option<String>, AppError> {
     let path = store::store_dir(repo).join(BRIEF_FILE);
     match fs::read_to_string(&path) {
         Ok(text) if text.trim().is_empty() => Ok(None),

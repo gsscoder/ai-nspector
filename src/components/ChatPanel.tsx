@@ -13,7 +13,7 @@ export interface PendingTurn {
   reply: string;
 }
 
-function Message({ message }: { message: ChatMessage }) {
+export function Message({ message }: { message: ChatMessage }) {
   if (message.role === "assistant") return <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>;
   return <p className="ml-auto max-w-[85%] rounded-lg bg-muted px-3 py-2 text-sm whitespace-pre-wrap">{message.content}</p>;
 }
