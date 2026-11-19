@@ -18,7 +18,7 @@ function ModuleCard({ data: { module: m, dimmed, onOpen } }: NodeProps<ModuleNod
     <>
       <Handle type="target" position={Position.Top} style={HIDDEN_HANDLE} />
       <button
-        className="flex h-32 w-60 flex-col rounded-xl border bg-card p-3 text-left outline-none transition-colors hover:border-foreground/20 hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="nopan flex h-32 w-60 flex-col rounded-xl border bg-card p-3 text-left outline-none transition-colors hover:border-foreground/20 hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
         style={{ opacity: dimmed ? DIMMED_OPACITY : 1 }}
         onClick={onOpen}
       >
