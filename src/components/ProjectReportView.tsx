@@ -3,7 +3,6 @@ import { ChevronDown, ChevronRight, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import AgentPromptDialog from "@/components/AgentPromptDialog";
 import LlmHint from "@/components/LlmHint";
-import { Message } from "@/components/ChatPanel";
 import { createProjectAgentPrompt } from "@/api";
 import { useLlmBlocked } from "@/lib/llmConfigured";
 import { useGeneration } from "@/lib/useGeneration";
@@ -18,7 +17,7 @@ const STATUS_BADGE: Record<ModuleReport["status"], { label: string; className: s
 function ModuleBody({ module }: { module: ModuleReport }) {
   switch (module.status) {
     case "done":
-      return <Message message={{ role: "assistant", content: module.text }} />;
+      return <p className="text-sm leading-relaxed whitespace-pre-wrap">{module.text}</p>;
     case "nothingFound":
       return <p className="text-sm text-muted-foreground">No findings</p>;
     case "failed":
@@ -30,7 +29,7 @@ function ModuleBody({ module }: { module: ModuleReport }) {
   }
 }
 
-// Same layout as the chat panel of one module: header, scrolling body, footer with the agent prompt.
+// Header, scrolling body, footer with the agent prompt.
 export default function ProjectReportView({
   repoRoot,
   projectId,

@@ -1,6 +1,6 @@
 # AI-nspector
 
-![version](https://img.shields.io/badge/version-0.1.0-blue)
+![version](https://img.shields.io/badge/version-0.2.0-blue)
 
 An AI-powered code inspector for desktop. Use it on your own repository or to explore a new one. More and more code is AI-generated, and this app helps you see what is in it and what to improve.
 
@@ -36,9 +36,10 @@ Repo  →  Project  →  Module  →  File
 | **Over-engineering** | Code that can do the same thing more directly: dead code, needless abstraction, pass-throughs, speculative flexibility. |
 | **Bugs** | Defects with a concrete failure scenario: security, data, integration, concurrency, performance and more. |
 
-- **Module analysis** runs one analysis on one module. The answer opens a chat: ask about the findings, push back, narrow them down. The chat is saved in `<repo>/.ainspector/`. When the module files change, the chat becomes read-only; discard it and run again.
-- **Project analysis** runs one analysis on the modules you select, one module after the other. It needs the repo overview. The report shows each module as done, nothing found or failed. It is not saved.
-- **Create agent prompt** turns a chat or a project report into a prompt for a coding agent. The prompt lists the findings as proposals with their confidence and tells the agent to verify each one in the code before it changes anything. Edit it if needed, then copy it.
+- **Module analysis** runs one analysis on one module.
+- **Project analysis** runs one analysis on the modules you select, one module after the other.
+- Both need the repo overview. The report shows each module as done, nothing found or failed. It is not saved.
+- **Create agent prompt** turns a report into a prompt for a coding agent. The prompt lists the findings as proposals with their confidence and tells the agent to verify each one in the code before it changes anything. Edit it if needed, then copy it.
 
 Both analyses review only. The app never changes your code.
 
@@ -46,7 +47,7 @@ Both analyses review only. The app never changes your code.
 
 - **Module identification** sends structure only (file paths, imports, symbols) and the repo brief. No source code.
 - **Repo overview** sends the text of the documentation files that you select. Do not select files that hold secrets or internal URLs. When a repo has no documentation, you can confirm an overview inferred from the structure: file paths, manifest files and module names. No source code is sent.
-- **Module and project analysis send the source code of the module files**, the project structure and the repo overview or brief. Chats store only the messages, never a copy of the source.
+- **Module and project analysis send the source code of the module files**, the project structure and the repo brief.
 
 Any OpenAI-compatible endpoint works, and Azure Foundry too. Use a local model (for example Ollama) if your code must not leave your machine. The API key is stored in the OS credential store (Windows Credential Manager, or the Secret Service on Linux). The key is never written to the repo.
 
@@ -102,7 +103,7 @@ For other distributions, see the [Tauri prerequisites](https://tauri.app/start/p
 3. Recommended: press **Overview**, select the documentation files (or **Infer from structure** when there are none), then press **Generate**. The app writes `brief.md`, `overview.md` and `overview.json` to `<repo>/.ainspector/`. A new run overwrites them. The overview makes the AI answers more precise, and project analysis needs it.
 4. Select a project, then press **Identify modules**. You can cancel while it runs. Switch between **Cards** and **Graph**; in the graph, hover a module to see the modules it is linked to.
 5. Select a module, then select a file to read it.
-6. Module analysis: in the **Analyses** panel of a module, press **Run** on an analysis. Ask follow-up questions in the chat, then press **Create agent prompt**. Press **Discard** to remove the chat before you run another analysis on that module.
+6. Module analysis: in the **Analyses** panel of a module, press **Run** on an analysis. When the report is ready, press **Create agent prompt**.
 7. Project analysis: in the **Project analysis** panel of a project, select an analysis and the modules, then press **Run**. When the report is ready, press **Create agent prompt**.
 
 The breadcrumb at the top (`repo › project › module`) has a dropdown on each level to switch between siblings.
@@ -119,8 +120,7 @@ npx tsc --noEmit                    # type check the frontend
 - The prompt budget is fixed at about 100,000 tokens. A very large project gives an error when you identify modules. A module too large for one request cannot be analyzed; in a project analysis, only that module fails. Batch splitting is not built yet.
 - TypeScript path aliases (for example `@/`) look like external packages, so those imports are missing from the import graph.
 - "Open in editor" works only with VS Code. If it is not found, the app shows the file in the file manager.
-- A module has one chat at a time, with one analysis. Project reports are not saved: closing the report loses it.
-- Identifying the modules of a project again deletes the chats of that project, because module ids can change.
+- Reports are not saved: closing a report loses it.
 - AI-slop detection is planned. It is not built yet.
 
 ## License

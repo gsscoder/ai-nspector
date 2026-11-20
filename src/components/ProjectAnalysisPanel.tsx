@@ -84,7 +84,7 @@ export default function ProjectAnalysisPanel({
         </Button>
       </div>
       {overviewMissing && (
-        <p className="mb-2 text-xs text-muted-foreground">Generate the repo overview for better results.</p>
+        <p className="mb-2 text-xs text-muted-foreground">Generate the repo overview first. The analysis needs it.</p>
       )}
       <LlmHint className="mb-2" />
       <div className="flex flex-col gap-2 rounded-xl border bg-card p-3">

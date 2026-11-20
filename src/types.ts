@@ -69,20 +69,6 @@ export interface AnalysisInfo {
   description: string;
 }
 
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-export interface ChatFile {
-  analysis: string;
-  moduleName: string;
-  model: string;
-  createdAt: string;
-  messages: ChatMessage[];
-  outdated: boolean;
-}
-
 // Report of one analysis run over several modules of a project. createdAt is RFC 3339.
 export interface ModuleReport {
   moduleId: string;

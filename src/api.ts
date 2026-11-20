@@ -4,7 +4,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type {
   AnalysisInfo,
-  ChatFile,
   ModuleRelation,
   ModulesFile,
   OverviewInfo,
@@ -42,23 +41,8 @@ export const onModulesProgress = (cb: (stage: string) => void) =>
 
 export const listAnalyses = () => invoke<AnalysisInfo[]>("list_analyses");
 
-export const loadChat = (repoPath: string, projectId: string, moduleId: string) =>
-  invoke<ChatFile | null>("load_chat", { repoPath, projectId, moduleId });
-
-export const startAnalysis = (repoPath: string, projectId: string, moduleId: string, analysisId: string) =>
-  invoke<ChatFile>("start_analysis", { repoPath, projectId, moduleId, analysisId });
-
 export const startProjectAnalysis = (repoPath: string, projectId: string, analysisId: string, moduleIds: string[]) =>
   invoke<ProjectReport>("start_project_analysis", { repoPath, projectId, analysisId, moduleIds });
-
-export const sendChatMessage = (repoPath: string, projectId: string, moduleId: string, text: string) =>
-  invoke<ChatFile>("send_chat_message", { repoPath, projectId, moduleId, text });
-
-export const discardChat = (repoPath: string, projectId: string, moduleId: string) =>
-  invoke<void>("discard_chat", { repoPath, projectId, moduleId });
-
-export const createAgentPrompt = (repoPath: string, projectId: string, moduleId: string) =>
-  invoke<string>("create_agent_prompt", { repoPath, projectId, moduleId });
 
 export const createProjectAgentPrompt = (repoPath: string, projectId: string, findings: { moduleId: string; text: string }[]) =>
   invoke<string>("create_project_agent_prompt", { repoPath, projectId, findings });

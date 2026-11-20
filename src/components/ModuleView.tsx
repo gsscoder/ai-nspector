@@ -1,23 +1,14 @@
 import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import AgentPromptDialog from "@/components/AgentPromptDialog";
 import AnalysisPanel from "@/components/AnalysisPanel";
-import ChatPanel, { type PendingTurn } from "@/components/ChatPanel";
 import CodeView from "@/components/CodeView";
-import {
-  createAgentPrompt,
-  discardChat,
-  listAnalyses,
-  loadChat,
-  onChatDelta,
-  openInEditor,
-  sendChatMessage,
-  startAnalysis,
-} from "@/api";
+import GenerationProgress from "@/components/GenerationProgress";
+import ProjectReportView from "@/components/ProjectReportView";
+import { listAnalyses, onChatDelta, openInEditor, startProjectAnalysis } from "@/api";
 import { splitPath } from "@/lib/project";
 import { useGeneration } from "@/lib/useGeneration";
-import type { AnalysisInfo, ChatFile, Module, OverviewInfo } from "@/types";
+import type { AnalysisInfo, Module, OverviewInfo, ProjectReport } from "@/types";
 
 export default function ModuleView({
   repoRoot,
@@ -35,61 +26,35 @@ export default function ModuleView({
   const [selected, setSelected] = useState(files[0]?.path);
   const [openError, setOpenError] = useState<string | null>(null);
   const [analyses, setAnalyses] = useState<AnalysisInfo[]>([]);
-  const [chat, setChat] = useState<ChatFile | null | undefined>(undefined); // undefined: still loading
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [chatOpen, setChatOpen] = useState(true);
-  const [pending, setPending] = useState<PendingTurn | null>(null);
-  const [agentPrompt, setAgentPrompt] = useState<string | null>(null); // kept while the dialog is closed
-  const [promptOpen, setPromptOpen] = useState(false);
-  const chatGeneration = useGeneration();
-  const promptGeneration = useGeneration();
+  const [report, setReport] = useState<ProjectReport | null>(null);
+  const [streamed, setStreamed] = useState("");
+  const generation = useGeneration();
 
   useEffect(() => {
     let stale = false;
-    Promise.all([listAnalyses(), loadChat(repoRoot, projectId, module.id)])
-      .then(([list, file]) => {
-        if (stale) return;
-        setAnalyses(list);
-        setChat(file);
-      })
+    listAnalyses()
+      .then((list) => !stale && setAnalyses(list))
       .catch((e) => !stale && setLoadError(String(e)));
     return () => {
       stale = true;
     };
-  }, [repoRoot, projectId, module.id]);
+  }, []);
 
-  async function runChat(question: string | null, call: () => Promise<ChatFile>) {
-    setChatOpen(true);
-    setPending({ question, reply: "" });
-    const file = await chatGeneration.run(async () => {
-      const unlisten = await onChatDelta((text) => setPending((p) => p && { ...p, reply: p.reply + text }));
+  async function run(analysisId: string) {
+    const result = await generation.run(async () => {
+      const unlisten = await onChatDelta((text) => setStreamed((s) => s + text));
       try {
-        return await call();
+        return await startProjectAnalysis(repoRoot, projectId, analysisId, [module.id]);
       } finally {
         unlisten();
       }
     });
-    setPending(null);
-    if (!file) return false;
-    setChat(file);
-    setAgentPrompt(null);
-    return true;
+    setStreamed("");
+    if (result) setReport(result);
   }
 
-  async function discard() {
-    await discardChat(repoRoot, projectId, module.id);
-    setChat(null);
-    setAgentPrompt(null);
-  }
-
-  async function createPrompt() {
-    const text = await promptGeneration.run(() => createAgentPrompt(repoRoot, projectId, module.id));
-    if (text !== null) setAgentPrompt(text);
-  }
-
-  const chatProgress = chatGeneration.generating ? chatGeneration : null;
-  const promptProgress = promptGeneration.generating ? promptGeneration : null;
-  const chatError = chatGeneration.error ?? loadError;
+  const error = generation.error ?? loadError;
 
   return (
     <div className="flex min-h-0 flex-1 gap-6">
@@ -160,41 +125,40 @@ export default function ModuleView({
           </section>
           <AnalysisPanel
             analyses={analyses}
-            chat={chat}
             overviewMissing={overview === null}
-            running={chatProgress !== null}
-            onRun={(analysisId) => runChat(null, () => startAnalysis(repoRoot, projectId, module.id, analysisId))}
-            onOpenChat={() => setChatOpen(true)}
+            running={generation.generating}
+            onRun={run}
           />
         </div>
-        {(chat || chatProgress || chatError) && (
-          <ChatPanel
-            chat={chat ?? null}
-            title={chat ? (analyses.find((a) => a.id === chat.analysis)?.name ?? chat.analysis) : "Analysis"}
-            pending={pending}
-            progress={chatProgress}
-            error={chatError}
-            open={chatOpen}
-            onToggle={() => setChatOpen(!chatOpen)}
-            onSend={(text) => runChat(text, () => sendChatMessage(repoRoot, projectId, module.id, text))}
-            onDiscard={discard}
-            onCreateAgentPrompt={() => {
-              setPromptOpen(true);
-              if (agentPrompt === null) createPrompt();
-            }}
+        {(generation.generating || error) && (
+          <div className="flex shrink-0 flex-col gap-2 rounded-xl border bg-card p-3">
+            {generation.generating && (
+              <>
+                <GenerationProgress stage={generation.stage} seconds={generation.seconds} />
+                {streamed !== "" && (
+                  <p className="max-h-40 overflow-y-auto text-xs whitespace-pre-wrap text-muted-foreground">{streamed}</p>
+                )}
+              </>
+            )}
+            {error && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
+          </div>
+        )}
+        {report && (
+          <ProjectReportView
+            key={report.createdAt}
+            repoRoot={repoRoot}
+            projectId={projectId}
+            report={report}
+            analysisName={analyses.find((a) => a.id === report.analysis)?.name ?? report.analysis}
+            requested={1}
+            onClose={() => setReport(null)}
           />
         )}
       </div>
-      {promptOpen && (
-        <AgentPromptDialog
-          prompt={agentPrompt}
-          progress={promptProgress}
-          error={promptGeneration.error}
-          onChange={setAgentPrompt}
-          onRegenerate={createPrompt}
-          onClose={() => setPromptOpen(false)}
-        />
-      )}
     </div>
   );
 }

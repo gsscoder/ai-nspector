@@ -49,7 +49,7 @@ export default function AgentPromptDialog({
         <div>
           <DialogTitle>Agent prompt</DialogTitle>
           <DialogDescription>
-            Edit the prompt if needed, then copy it into your coding agent. It lists the changes the chat kept.
+            Edit the prompt if needed, then copy it into your coding agent. It lists the changes the findings call for.
           </DialogDescription>
         </div>
         <textarea
