@@ -11,11 +11,22 @@ mod scan;
 mod settings;
 mod store;
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                // GNOME cannot resize a frameless window, so Linux keeps the native frame.
+                #[cfg(target_os = "linux")]
+                window.set_decorations(true)?;
+                window.show()?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             scan::open_repo,
             scan::list_recent_repos,

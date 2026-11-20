@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import Notice from "@/components/Notice";
 import RepoView from "@/components/RepoView";
 import Settings from "@/components/Settings";
+import WindowControls from "@/components/WindowControls";
 import { loadOverview } from "@/api";
 import { LlmConfiguredContext } from "@/lib/llmConfigured";
 import { getSettings } from "@/settingsApi";
@@ -57,8 +58,11 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b bg-card/40 px-6">
-        <h1 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+      <header
+        data-tauri-drag-region
+        className="flex h-9 shrink-0 select-none items-center border-b bg-card/40 pl-6"
+      >
+        <h1 className="pointer-events-none flex flex-1 items-center gap-2 text-sm font-semibold tracking-tight">
           <ScanSearch className="size-4 text-primary" />
           ai-nspector
           {version !== null && <span className="font-normal text-muted-foreground tabular-nums">v{version}</span>}
@@ -66,12 +70,13 @@ function App() {
         <Button
           variant="ghost"
           size="sm"
-          className="-mr-2.5 text-muted-foreground"
+          className="mr-2 text-muted-foreground"
           onClick={() => setShowSettings(!showSettings)}
         >
           {showSettings ? <ArrowLeft /> : <Settings2 />}
           {showSettings ? "Back" : "Settings"}
         </Button>
+        <WindowControls />
       </header>
       {!showSettings && llmConfigured === false && !llmNoticeDismissed && (
         <Notice tone="error" onDismiss={() => setLlmNoticeDismissed(true)}>
