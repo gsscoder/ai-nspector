@@ -2,15 +2,15 @@
 
 ![version](https://img.shields.io/badge/version-0.1.0-blue)
 
-An AI-powered code inspector for desktop. Use it on your own repository or to explore a new one. More and more code is AI-generated, and this app helps you see what is in it.
+An AI-powered code inspector for desktop. Use it on your own repository or to explore a new one. More and more code is AI-generated, and this app helps you see what is in it and what to improve.
 
-Open a repository. The app finds its projects, asks an LLM to split a project into logical modules, and lets you read the files of each module.
+Open a repository. The app finds its projects, asks an LLM to split a project into logical modules, and lets you read the files of each module. Then it reviews a module, or a selection of modules, for over-engineering or bugs, and turns the findings into a prompt that you copy into a coding agent (Claude Code, Codex).
 
 ![Demo](docs/demo.gif)
 
 ## Why
 
-Tools exist that explain a repository (DeepWiki, Sourcegraph, Greptile) and tools that measure code health (CodeScene, SonarQube). Few tools judge over-engineering and AI-generated "slop". That is the long-term goal of this project. The MVP builds the base: a stable, cached map of a repository.
+Tools exist that explain a repository (DeepWiki, Sourcegraph, Greptile) and tools that measure code health (CodeScene, SonarQube). Few tools judge over-engineering and AI-generated "slop". That is the goal of this project. Over-engineering and bug reviews are built; AI-slop detection comes later.
 
 ## How it works
 
@@ -20,24 +20,39 @@ Repo  →  Project  →  Module  →  File
 
 | Level | Source | Notes |
 |-------|--------|-------|
-| **Repo** | The folder you open | Can hold several independent projects. |
-| **Project** | Manifest files (`package.json`, `.csproj`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, ...) | No AI. Fast, free, same result every run. |
-| **Module** | LLM | The LLM sees only structure: file list, imports and top-level symbols. It does not see source code bodies. |
+| **Repo** | The folder you open | Can hold several independent projects. An optional overview (`brief.md`, `overview.md`) describes the repo to the LLM. |
+| **Project** | Manifest files (`package.json`, `.csproj`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, ...) | No AI. Fast, free, same result every run. Each project gets a role: backend, frontend, test or unknown. |
+| **Module** | LLM | The LLM sees only structure: file list, imports and top-level symbols, plus the repo brief. It does not see source code bodies. Show modules as cards or as a graph of their imports. |
 | **File** | Source file | Read-only view with syntax highlighting. "Open in editor" opens VS Code. |
 
-- Module analysis supports **Python**, **C#** and **TypeScript / JavaScript**.
-- Every file belongs to at least one module. Files the LLM leaves out go to an "Unassigned" module.
-- Results are cached in `<repo>/.ainspector/` (git-ignored automatically). The cache key is the git commit, plus a fingerprint of local changes. When the repo changes, the app shows an **Outdated** badge. It does not regenerate on its own.
+- Import and symbol parsing supports **Python**, **C#** and **TypeScript / JavaScript**.
+- Every file has exactly one primary module. A file can also be a secondary file of other modules. Files the LLM leaves out go to an "Unassigned" module.
+- Module results are cached in `<repo>/.ainspector/` (git-ignored automatically). The cache key is the git commit, plus a fingerprint of local changes. When the repo changes, the app shows an **Outdated** badge. It does not regenerate on its own.
+
+### Analyses
+
+| Analysis | Finds |
+|----------|-------|
+| **Over-engineering** | Code that can do the same thing more directly: dead code, needless abstraction, pass-throughs, speculative flexibility. |
+| **Bugs** | Defects with a concrete failure scenario: security, data, integration, concurrency, performance and more. |
+
+- **Module analysis** runs one analysis on one module. The answer opens a chat: ask about the findings, push back, narrow them down. The chat is saved in `<repo>/.ainspector/`. When the module files change, the chat becomes read-only; discard it and run again.
+- **Project analysis** runs one analysis on the modules you select, one module after the other. It needs the repo overview. The report shows each module as done, nothing found or failed. It is not saved.
+- **Create agent prompt** turns a chat or a project report into a prompt for a coding agent. The prompt lists the findings as proposals with their confidence and tells the agent to verify each one in the code before it changes anything. Edit it if needed, then copy it.
+
+Both analyses review only. The app never changes your code.
 
 ### Privacy
 
-Module analysis sends structure only, never source code. The repo overview sends the text of the documentation files that you select. Do not select files that hold secrets or internal URLs. When a repo has no documentation, you can confirm an overview inferred from the structure: file paths, manifest files and module names. No source code is sent.
+- **Module identification** sends structure only (file paths, imports, symbols) and the repo brief. No source code.
+- **Repo overview** sends the text of the documentation files that you select. Do not select files that hold secrets or internal URLs. When a repo has no documentation, you can confirm an overview inferred from the structure: file paths, manifest files and module names. No source code is sent.
+- **Module and project analysis send the source code of the module files**, the project structure and the repo overview or brief. Chats store only the messages, never a copy of the source.
 
-Any OpenAI-compatible endpoint works. Use a local model (for example Ollama) if your code must not leave your machine. The API key is stored in the OS credential store (Windows Credential Manager, or the Secret Service on Linux). The key is never written to the repo.
+Any OpenAI-compatible endpoint works, and Azure Foundry too. Use a local model (for example Ollama) if your code must not leave your machine. The API key is stored in the OS credential store (Windows Credential Manager, or the Secret Service on Linux). The key is never written to the repo.
 
 ## Tech stack
 
-[Tauri 2](https://tauri.app/) (Rust backend), React, TypeScript, Vite, Tailwind CSS, shadcn/ui, [Shiki](https://shiki.style/), tree-sitter.
+[Tauri 2](https://tauri.app/) (Rust backend), React, TypeScript, Vite, Tailwind CSS, shadcn/ui, [Shiki](https://shiki.style/), [React Flow](https://reactflow.dev/) with dagre, tree-sitter.
 
 ## Build and run
 
@@ -79,14 +94,16 @@ For other distributions, see the [Tauri prerequisites](https://tauri.app/start/p
 
 ## Use
 
-1. Open **Settings**. Enter the base URL, the model name and the API key. Press **Test connection**.
+1. Open **Settings**. Select **OpenAI-compatible** or **Azure Foundry**, enter the base URL, the model (the deployment name on Azure) and the API key. Press **Test connection**. Until the LLM is configured, the AI actions stay disabled.
    - OpenRouter: `https://openrouter.ai/api/v1`
    - Ollama: `http://localhost:11434/v1` (no key needed)
+   - Azure Foundry: `https://<resource>.cognitiveservices.azure.com` (key required)
 2. Open a repository folder. The app lists the detected projects.
-3. Select a project, then press **Generate modules**. You can cancel while it runs.
-4. Select a module card, then select a file to read it.
-
-5. Optional: press **Overview**, select the documentation files, then press **Generate**. The app writes `brief.md` and `overview.md` to `<repo>/.ainspector/`. A new run overwrites them.
+3. Recommended: press **Overview**, select the documentation files (or **Infer from structure** when there are none), then press **Generate**. The app writes `brief.md`, `overview.md` and `overview.json` to `<repo>/.ainspector/`. A new run overwrites them. The overview makes the AI answers more precise, and project analysis needs it.
+4. Select a project, then press **Identify modules**. You can cancel while it runs. Switch between **Cards** and **Graph**; in the graph, hover a module to see the modules it is linked to.
+5. Select a module, then select a file to read it.
+6. Module analysis: in the **Analyses** panel of a module, press **Run** on an analysis. Ask follow-up questions in the chat, then press **Create agent prompt**. Press **Discard** to remove the chat before you run another analysis on that module.
+7. Project analysis: in the **Project analysis** panel of a project, select an analysis and the modules, then press **Run**. When the report is ready, press **Create agent prompt**.
 
 The breadcrumb at the top (`repo › project › module`) has a dropdown on each level to switch between siblings.
 
@@ -99,10 +116,12 @@ npx tsc --noEmit                    # type check the frontend
 
 ## Known limits
 
-- The prompt budget is fixed at about 100,000 tokens. A very large project gives an error. Batch splitting is not built yet.
+- The prompt budget is fixed at about 100,000 tokens. A very large project gives an error when you identify modules. A module too large for one request cannot be analyzed; in a project analysis, only that module fails. Batch splitting is not built yet.
 - TypeScript path aliases (for example `@/`) look like external packages, so those imports are missing from the import graph.
 - "Open in editor" works only with VS Code. If it is not found, the app shows the file in the file manager.
-- Over-engineering and AI-slop detection are planned. They are not built yet.
+- A module has one chat at a time, with one analysis. Project reports are not saved: closing the report loses it.
+- Identifying the modules of a project again deletes the chats of that project, because module ids can change.
+- AI-slop detection is planned. It is not built yet.
 
 ## License
 
