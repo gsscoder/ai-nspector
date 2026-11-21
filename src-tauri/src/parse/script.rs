@@ -7,7 +7,7 @@ use tree_sitter::Node;
 use super::paths::{join, normalize, parent_dir};
 use super::{Symbol, SymbolKind, each_node, named_symbol, node_text};
 
-const SOURCE_EXTENSIONS: [&str; 6] = ["ts", "tsx", "js", "jsx", "mjs", "cjs"];
+const SOURCE_EXTENSIONS: [&str; 8] = ["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"];
 
 /// Module specifiers found in `import`/`export ... from`/`require()`/`import()`,
 /// in document order, together with the top-level symbols.
@@ -91,7 +91,7 @@ fn declaration(node: Node, source: &str) -> Option<Symbol> {
 /// Project files that the specifiers of `file` point to.
 ///
 /// Only relative specifiers (`./`, `../`) are internal; a bare name is a package. A
-/// specifier is matched as written, then with a `.js`/`.jsx` ending mapped to its
+/// specifier is matched as written, then with a `.js`/`.jsx`/`.mjs`/`.cjs` ending mapped to its
 /// TypeScript source (ESM style), then with each source extension appended, then as a
 /// folder with an `index.*` file.
 pub(super) fn resolve(files: &BTreeSet<String>, file: &str, specifiers: &[String]) -> Vec<String> {
@@ -125,12 +125,17 @@ fn find_module(files: &BTreeSet<String>, path: &str) -> Option<String> {
         .or_else(|| with_extensions(&join(path, "index")))
 }
 
-/// ESM TypeScript writes the compiled name in imports: `./x.js` stands for `./x.ts` or `./x.tsx`.
+/// ESM TypeScript writes the compiled name in imports: `./x.js` stands for `./x.ts` or `./x.tsx`,
+/// `./x.mjs` for `./x.mts` and `./x.cjs` for `./x.cts`.
 fn typescript_sources_of(path: &str) -> Vec<String> {
     if let Some(stem) = path.strip_suffix(".js") {
         vec![format!("{stem}.ts"), format!("{stem}.tsx")]
     } else if let Some(stem) = path.strip_suffix(".jsx") {
         vec![format!("{stem}.tsx")]
+    } else if let Some(stem) = path.strip_suffix(".mjs") {
+        vec![format!("{stem}.mts")]
+    } else if let Some(stem) = path.strip_suffix(".cjs") {
+        vec![format!("{stem}.cts")]
     } else {
         Vec::new()
     }

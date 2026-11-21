@@ -6,6 +6,7 @@
 mod csharp;
 mod paths;
 mod python;
+mod rust;
 mod script;
 #[cfg(test)]
 mod tests;
@@ -107,6 +108,7 @@ pub fn analyze_project(repo_root: &Path, files: &[String]) -> Result<ProjectStru
                     script::resolve(&project_files, &file.path, specifiers)
                 }
                 Links::CSharp(unit) => namespaces.resolve(unit),
+                Links::Rust(unit) => rust::resolve(&project_files, &file.path, unit),
             };
             let imports: BTreeSet<String> = targets
                 .into_iter()
@@ -142,24 +144,27 @@ fn normalize_project_files(files: &[String]) -> Result<BTreeSet<String>, String>
         .collect()
 }
 
+/// The one table of source extensions with a grammar; `scan` reads it too.
 #[derive(Debug, Clone, Copy)]
-enum Dialect {
+pub(crate) enum Dialect {
     Python,
     TypeScript,
     Tsx,
     JavaScript,
     CSharp,
+    Rust,
 }
 
 impl Dialect {
-    fn from_path(path: &str) -> Option<Self> {
+    pub(crate) fn from_path(path: &str) -> Option<Self> {
         let extension = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
         match extension.as_str() {
-            "py" => Some(Self::Python),
-            "ts" => Some(Self::TypeScript),
+            "py" | "pyi" => Some(Self::Python),
+            "ts" | "mts" | "cts" => Some(Self::TypeScript),
             "tsx" => Some(Self::Tsx),
             "js" | "jsx" | "mjs" | "cjs" => Some(Self::JavaScript),
             "cs" => Some(Self::CSharp),
+            "rs" => Some(Self::Rust),
             _ => None,
         }
     }
@@ -171,6 +176,7 @@ impl Dialect {
             Self::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
             Self::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
             Self::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
+            Self::Rust => tree_sitter_rust::LANGUAGE.into(),
         }
     }
 }
@@ -181,6 +187,7 @@ enum Links {
     Python(Vec<python::Import>),
     Script(Vec<String>),
     CSharp(csharp::Unit),
+    Rust(rust::Unit),
 }
 
 struct ParsedFile {
@@ -225,6 +232,10 @@ fn parse_file(repo_root: &Path, path: &str) -> Result<ParsedFile, String> {
         Dialect::CSharp => {
             let (unit, symbols) = csharp::extract(root, source);
             (Links::CSharp(unit), symbols)
+        }
+        Dialect::Rust => {
+            let (unit, symbols) = rust::extract(root, source);
+            (Links::Rust(unit), symbols)
         }
     };
     Ok(ParsedFile {

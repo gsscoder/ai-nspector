@@ -880,7 +880,9 @@ mod tests {
             id: "web/package.json".into(),
             name: "web".into(),
             language: Language::Typescript,
+            languages: vec![Language::Typescript],
             role: Role::Unknown,
+            frameworks: vec![],
             root: "web".into(),
             files: vec![],
         };
@@ -923,7 +925,9 @@ mod tests {
             id: id.into(),
             name: "web".into(),
             language,
+            languages: vec![language],
             role: Role::Unknown,
+            frameworks: vec![],
             root: root.into(),
             files,
         }

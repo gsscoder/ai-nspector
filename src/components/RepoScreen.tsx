@@ -7,7 +7,12 @@ import {
   CircleQuestionMark,
   FlaskConical,
   FolderGit2,
+  Layers,
+  Library,
+  Monitor,
   Server,
+  Shapes,
+  Terminal,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -21,12 +26,17 @@ import {
 import ModuleView from "@/components/ModuleView";
 import OverviewDialog from "@/components/OverviewDialog";
 import ProjectView from "@/components/ProjectView";
-import { STACK, projectLabel } from "@/lib/project";
+import { projectLabel, stackLabel } from "@/lib/project";
 import type { ModulesFile, OverviewInfo, Repo, Role } from "@/types";
 
 const ROLE_ICON: Record<Role, LucideIcon> = {
   backend: Server,
   frontend: AppWindow,
+  desktop: Monitor,
+  fullstack: Layers,
+  library: Library,
+  cli: Terminal,
+  fixture: Shapes,
   test: FlaskConical,
   unknown: CircleQuestionMark,
 };
@@ -83,6 +93,8 @@ export default function RepoScreen({
   const [data, setData] = useState<ModulesFile | null>(null);
   const [overviewOpen, setOverviewOpen] = useState(false);
   const project = repo.projects.find((p) => p.id === projectId);
+  // Fixture projects come last; the sort is stable, so the backend order holds inside each group.
+  const cards = [...repo.projects].sort((a, b) => Number(a.role === "fixture") - Number(b.role === "fixture"));
   const module = data?.modules.find((m) => m.id === moduleId);
 
   return (
@@ -116,7 +128,7 @@ export default function RepoScreen({
             items={repo.projects.map((p) => ({
               id: p.id,
               label: projectLabel(p),
-              hint: `${STACK[p.language]} · ${p.files.length} ${p.files.length === 1 ? "file" : "files"}`,
+              hint: `${stackLabel(p)} · ${p.files.length} ${p.files.length === 1 ? "file" : "files"}`,
             }))}
             onSelect={(id) => {
               setProjectId(id);
@@ -146,7 +158,7 @@ export default function RepoScreen({
       ) : !project ? (
         <section className="flex flex-col gap-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {repo.projects.map((p) => (
+            {cards.map((p) => (
               <button
                 key={p.id}
                 className="rounded-xl border bg-card p-4 text-left outline-none transition-colors hover:border-foreground/20 hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
@@ -158,8 +170,15 @@ export default function RepoScreen({
                 </div>
                 <div className="truncate text-sm text-muted-foreground">{p.root === "" ? "repo root" : p.root}</div>
                 <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="rounded-md bg-muted px-1.5 py-0.5 font-medium text-foreground/80">{STACK[p.language]}</span>
-                  {p.files.length} {p.files.length === 1 ? "file" : "files"}
+                  <span
+                    className="min-w-0 truncate rounded-md bg-muted px-1.5 py-0.5 font-medium text-foreground/80"
+                    title={[stackLabel(p), ...p.frameworks].join(" · ")}
+                  >
+                    {[stackLabel(p), ...p.frameworks].join(" · ")}
+                  </span>
+                  <span className="shrink-0">
+                    {p.files.length} {p.files.length === 1 ? "file" : "files"}
+                  </span>
                 </div>
               </button>
             ))}

@@ -1,14 +1,27 @@
 // Shared TypeScript types mirroring the Rust structs in src-tauri/src/scan.rs.
-export type Language = "python" | "dotnet" | "typescript" | "other";
+export type Language = "python" | "dotnet" | "typescript" | "rust" | "other";
 
-export type Role = "backend" | "frontend" | "test" | "unknown";
+export type Role =
+  | "backend"
+  | "frontend"
+  | "desktop"
+  | "fullstack"
+  | "library"
+  | "cli"
+  | "fixture"
+  | "test"
+  | "unknown";
 
 // Paths are relative to the repo root and use forward slashes.
 export interface Project {
   id: string;
   name: string;
   language: Language;
+  // `language` first, then each other language with at least a fifth of the files.
+  languages: Language[];
   role: Role;
+  // Display names of the known frameworks in the manifest, sorted and unique.
+  frameworks: string[];
   root: string;
   files: string[];
 }

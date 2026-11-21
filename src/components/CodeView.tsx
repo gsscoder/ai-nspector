@@ -3,13 +3,20 @@ import { readFile } from "@/api";
 
 const LANGS: Record<string, string> = {
   py: "python",
+  pyi: "python",
   cs: "csharp",
+  razor: "razor",
   ts: "typescript",
+  mts: "typescript",
+  cts: "typescript",
   tsx: "tsx",
   js: "javascript",
   jsx: "jsx",
   mjs: "javascript",
   cjs: "javascript",
+  vue: "vue",
+  svelte: "svelte",
+  rs: "rust",
 };
 
 type State = { html: string } | { error: string } | null;

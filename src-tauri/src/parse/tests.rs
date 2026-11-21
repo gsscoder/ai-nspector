@@ -404,3 +404,276 @@ fn debug_walk_skips_build_folders_and_other_languages() {
         vec!["app/a.py"]
     );
 }
+
+/// Writes `(path, content)` pairs below `root` and analyzes all of them as one project.
+fn analyze_sources(root: &Path, sources: &[(&str, &str)]) -> ProjectStructure {
+    for (path, content) in sources {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    let paths: Vec<&str> = sources.iter().map(|(path, _)| *path).collect();
+    analyze_paths(root, &paths).unwrap()
+}
+
+#[test]
+fn rust_symbols_are_top_level_items() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_sources(
+        dir.path(),
+        &[(
+            "lib.rs",
+            "pub fn run() {}\n\
+             pub(crate) struct Config { a: u8 }\n\
+             enum Mode { A, B }\n\
+             #[derive(Debug)]\n\
+             pub trait Store { fn get(&self); }\n\
+             type Id = u64;\n\
+             impl Config { fn new() -> Self { todo!() } }\n\
+             const LIMIT: u8 = 1;\n\
+             mod inline { pub fn hidden() {} }\n",
+        )],
+    );
+
+    assert_eq!(
+        symbols(&structure, "lib.rs"),
+        vec![
+            ("run", Function),
+            ("Config", Struct),
+            ("Mode", Enum),
+            ("Store", Interface),
+            ("Id", Type),
+        ]
+    );
+}
+
+#[test]
+fn rust_mod_statements_link_foo_rs_and_foo_mod_rs_in_the_module_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_sources(
+        dir.path(),
+        &[
+            (
+                "src/lib.rs",
+                "mod a;\nmod b;\nmod missing;\nmod inline { }\n",
+            ),
+            ("src/a.rs", "mod c;\n"),
+            ("src/a/c.rs", ""),
+            ("src/b/mod.rs", "mod d;\n"),
+            ("src/b/d.rs", ""),
+            ("src/inline.rs", ""),
+        ],
+    );
+
+    assert_eq!(
+        edges(&structure),
+        vec![
+            ("src/a.rs", vec!["src/a/c.rs"]),
+            ("src/a/c.rs", vec![]),
+            ("src/b/d.rs", vec![]),
+            ("src/b/mod.rs", vec!["src/b/d.rs"]),
+            ("src/inline.rs", vec![]),
+            ("src/lib.rs", vec!["src/a.rs", "src/b/mod.rs"]),
+        ]
+    );
+}
+
+#[test]
+fn rust_use_paths_resolve_against_crate_self_and_super_and_drop_the_own_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_sources(
+        dir.path(),
+        &[
+            ("src/lib.rs", ""),
+            (
+                "src/a.rs",
+                "use crate::b::Thing;\nuse self::c::Inner;\nuse crate::a::inner::Item;\n",
+            ),
+            (
+                "src/a/c.rs",
+                "use super::super::b::f;\nuse super::sibling::g;\n",
+            ),
+            ("src/a/sibling.rs", ""),
+            ("src/b.rs", ""),
+            ("src/d/mod.rs", "pub use super::b::Thing;\n"),
+        ],
+    );
+
+    assert_eq!(
+        edges(&structure),
+        vec![
+            ("src/a.rs", vec!["src/a/c.rs", "src/b.rs"]),
+            ("src/a/c.rs", vec!["src/a/sibling.rs", "src/b.rs"]),
+            ("src/a/sibling.rs", vec![]),
+            ("src/b.rs", vec![]),
+            ("src/d/mod.rs", vec!["src/b.rs"]),
+            ("src/lib.rs", vec![]),
+        ]
+    );
+}
+
+#[test]
+fn rust_grouped_use_gives_one_link_per_path_and_longest_file_prefix_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_sources(
+        dir.path(),
+        &[
+            ("src/main.rs", ""),
+            (
+                "src/user.rs",
+                "use crate::{a::{X, Y}, b::{self, Z as W}, c::*, d::sub::{Deep, deeper::Item}};\n",
+            ),
+            ("src/a.rs", ""),
+            ("src/b.rs", ""),
+            ("src/c/mod.rs", ""),
+            ("src/d/sub.rs", ""),
+            ("src/d/sub/deeper.rs", ""),
+        ],
+    );
+
+    assert_eq!(
+        edges(&structure)
+            .into_iter()
+            .find(|(path, _)| *path == "src/user.rs")
+            .unwrap()
+            .1,
+        vec![
+            "src/a.rs",
+            "src/b.rs",
+            "src/c/mod.rs",
+            "src/d/sub.rs",
+            "src/d/sub/deeper.rs"
+        ]
+    );
+}
+
+#[test]
+fn rust_external_crates_give_no_links_but_inline_module_crate_uses_resolve() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_sources(
+        dir.path(),
+        &[
+            ("src/lib.rs", ""),
+            (
+                "src/a.rs",
+                "use std::fs;\nuse serde::{Serialize, Deserialize};\nuse b::helper;\n\
+                 #[cfg(test)]\nmod tests {\n    use super::*;\n    use self::x::y;\n    use crate::b::Thing;\n}\n",
+            ),
+            ("src/b.rs", ""),
+            ("src/std.rs", ""),
+        ],
+    );
+
+    assert_eq!(
+        edges(&structure),
+        vec![
+            ("src/a.rs", vec!["src/b.rs"]),
+            ("src/b.rs", vec![]),
+            ("src/lib.rs", vec![]),
+            ("src/std.rs", vec![]),
+        ]
+    );
+}
+
+#[test]
+fn rust_crate_root_is_the_nearest_ancestor_with_lib_or_main() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_sources(
+        dir.path(),
+        &[
+            ("crates/x/src/lib.rs", "mod a;\n"),
+            ("crates/x/src/a.rs", "use crate::b::f;\nuse y::b::f;\n"),
+            ("crates/x/src/b.rs", ""),
+            ("crates/y/src/main.rs", ""),
+            ("crates/y/src/b.rs", ""),
+            ("loose/z.rs", "use crate::b::f;\n"),
+        ],
+    );
+
+    assert_eq!(
+        edges(&structure),
+        vec![
+            ("crates/x/src/a.rs", vec!["crates/x/src/b.rs"]),
+            ("crates/x/src/b.rs", vec![]),
+            ("crates/x/src/lib.rs", vec!["crates/x/src/a.rs"]),
+            ("crates/y/src/b.rs", vec![]),
+            ("crates/y/src/main.rs", vec![]),
+            ("loose/z.rs", vec![]),
+        ]
+    );
+}
+
+#[test]
+fn pyi_mts_and_cts_files_are_parsed_and_vue_svelte_razor_files_are_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_sources(
+        dir.path(),
+        &[
+            ("a.pyi", "class A: ...\n"),
+            ("b.mts", "export function f() {}\n"),
+            ("c.cts", "export class C {}\n"),
+            ("d.vue", "<script>export default {}</script>\n"),
+            ("e.svelte", "<script>let x = 1;</script>\n"),
+            ("f.razor", "@code { }\n"),
+        ],
+    );
+
+    assert_eq!(symbols(&structure, "a.pyi"), vec![("A", Class)]);
+    assert_eq!(symbols(&structure, "b.mts"), vec![("f", Function)]);
+    assert_eq!(symbols(&structure, "c.cts"), vec![("C", Class)]);
+    for path in ["d.vue", "e.svelte", "f.razor"] {
+        assert_eq!(symbols(&structure, path), vec![], "{path}");
+    }
+}
+
+#[test]
+fn mjs_and_cjs_specifiers_resolve_to_mts_and_cts_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_sources(
+        dir.path(),
+        &[
+            ("a.mts", "import './b.mjs';\nimport './c.cjs';\n"),
+            ("b.mts", "export const b = 1;\n"),
+            ("c.cts", "export const c = 1;\n"),
+        ],
+    );
+
+    assert_eq!(
+        edges(&structure),
+        vec![
+            ("a.mts", vec!["b.mts", "c.cts"]),
+            ("b.mts", vec![]),
+            ("c.cts", vec![])
+        ]
+    );
+}
+
+#[test]
+fn python_imports_resolve_to_stubs_when_no_source_file_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_sources(
+        dir.path(),
+        &[
+            (
+                "main.py",
+                "from pkg import stub\nimport other\nimport both\n",
+            ),
+            ("pkg/__init__.pyi", ""),
+            ("pkg/stub.pyi", "class S: ...\n"),
+            ("other.pyi", "class O: ...\n"),
+            ("both.py", "x = 1\n"),
+            ("both.pyi", "x: int\n"),
+        ],
+    );
+
+    let main = edges(&structure)
+        .into_iter()
+        .find(|(path, _)| *path == "main.py");
+    assert_eq!(
+        main,
+        Some((
+            "main.py",
+            vec!["both.py", "other.pyi", "pkg/__init__.pyi", "pkg/stub.pyi"]
+        ))
+    );
+}

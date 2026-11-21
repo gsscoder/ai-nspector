@@ -107,8 +107,9 @@ fn symbol(node: Node, source: &str) -> Option<Symbol> {
 /// 3. the first directory above the importing file that has no `__init__.py`
 ///    (covers a project whose files all sit inside one package).
 ///
-/// `a.b` matches `<root>/a/b.py`, then `<root>/a/b/__init__.py`. In `from a.b import c`
-/// the file `<root>/a/b/c.py` (or its package) is linked as well when it exists.
+/// `a.b` matches `<root>/a/b.py`, then `<root>/a/b/__init__.py`, then the stubs `<root>/a/b.pyi`
+/// and `<root>/a/b/__init__.pyi`. In `from a.b import c` the file `<root>/a/b/c.py` (or its
+/// package) is linked as well when it exists.
 pub(super) struct Resolver<'files> {
     files: &'files BTreeSet<String>,
     base: String,
@@ -219,11 +220,15 @@ impl<'files> Resolver<'files> {
     /// File that defines the dotted `module` below `dir`; an empty module is the package `dir` itself.
     fn module_file(&self, dir: &str, module: &str) -> Option<String> {
         if module.is_empty() {
-            return self.existing(&join(dir, "__init__.py"));
+            return self
+                .existing(&join(dir, "__init__.py"))
+                .or_else(|| self.existing(&join(dir, "__init__.pyi")));
         }
         let path = join(dir, &module.replace('.', "/"));
         self.existing(&format!("{path}.py"))
             .or_else(|| self.existing(&format!("{path}/__init__.py")))
+            .or_else(|| self.existing(&format!("{path}.pyi")))
+            .or_else(|| self.existing(&format!("{path}/__init__.pyi")))
     }
 
     fn existing(&self, path: &str) -> Option<String> {

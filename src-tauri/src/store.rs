@@ -220,7 +220,9 @@ mod tests {
             id: "package.json".into(),
             name: "demo".into(),
             language: Language::Typescript,
+            languages: vec![Language::Typescript],
             role: crate::scan::Role::Unknown,
+            frameworks: vec![],
             root: String::new(),
             files: files.iter().map(|f| f.to_string()).collect(),
         }
