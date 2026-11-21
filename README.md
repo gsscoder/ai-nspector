@@ -1,6 +1,6 @@
 # AI-nspector
 
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-0.6.0-blue)
 
 An AI-powered code inspector for desktop. Use it on your own repository or to explore a new one. More and more code is AI-generated, and this app helps you see what is in it and what to improve.
 
