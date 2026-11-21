@@ -20,9 +20,6 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                // GNOME cannot resize a frameless window, so Linux keeps the native frame.
-                #[cfg(target_os = "linux")]
-                window.set_decorations(true)?;
                 window.show()?;
             }
             Ok(())
