@@ -753,9 +753,13 @@ fn is_library_project(file_name: &str, text: &str) -> bool {
 fn is_test_project(file_name: &str, dir: &str, text: &str) -> bool {
     let folder = dir.rsplit('/').next().unwrap_or(dir).to_lowercase();
     TEST_FOLDERS.contains(&folder.as_str())
-        || TEST_FOLDER_SUFFIXES.iter().any(|suffix| folder.ends_with(suffix))
+        || TEST_FOLDER_SUFFIXES
+            .iter()
+            .any(|suffix| folder.ends_with(suffix))
         || (file_name.ends_with(".csproj")
-            && DOTNET_TEST_MARKERS.iter().any(|marker| text.contains(marker)))
+            && DOTNET_TEST_MARKERS
+                .iter()
+                .any(|marker| text.contains(marker)))
 }
 
 /// Extensions with a grammar come from `Dialect`, so scan and parse cannot disagree. `.vue`,

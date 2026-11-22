@@ -83,7 +83,10 @@ enum StreamEvent {
 /// full "Target URI" from the Foundry portal (deployment path, `api-version` query) both work.
 fn endpoint_url(provider: Provider, base_url: &str) -> Result<String, AppError> {
     match provider {
-        Provider::Openai => Ok(format!("{}/chat/completions", base_url.trim_end_matches('/'))),
+        Provider::Openai => Ok(format!(
+            "{}/chat/completions",
+            base_url.trim_end_matches('/')
+        )),
         Provider::Azure => {
             let origin = Url::parse(base_url)
                 .map(|url| url.origin())
@@ -94,7 +97,10 @@ fn endpoint_url(provider: Provider, base_url: &str) -> Result<String, AppError> 
                         "The base URL \"{base_url}\" is not a valid web address. Use the resource URL, for example https://<resource>.cognitiveservices.azure.com."
                     ))
                 })?;
-            Ok(format!("{}/openai/v1/chat/completions", origin.ascii_serialization()))
+            Ok(format!(
+                "{}/openai/v1/chat/completions",
+                origin.ascii_serialization()
+            ))
         }
     }
 }
@@ -142,7 +148,10 @@ fn empty_answer_error() -> AppError {
 
 fn extract_content(body: &str) -> Result<String, AppError> {
     let response: ChatResponse = serde_json::from_str(body).map_err(|e| {
-        AppError::Json("Unexpected response from the LLM server (no chat completion)".into(), e)
+        AppError::Json(
+            "Unexpected response from the LLM server (no chat completion)".into(),
+            e,
+        )
     })?;
     let choice = response
         .choices
@@ -168,7 +177,10 @@ fn parse_stream_line(line: &str) -> Result<StreamEvent, AppError> {
         return Ok(StreamEvent::Done);
     }
     let chunk: StreamChunk = serde_json::from_str(data).map_err(|e| {
-        AppError::Json("Unexpected response from the LLM server (no chat completion chunk)".into(), e)
+        AppError::Json(
+            "Unexpected response from the LLM server (no chat completion chunk)".into(),
+            e,
+        )
     })?;
     let Some(choice) = chunk.choices.into_iter().next() else {
         return Ok(StreamEvent::Skip);
@@ -196,7 +208,11 @@ impl LineBuffer {
     fn next_line(&mut self) -> Option<String> {
         let end = self.0.iter().position(|&byte| byte == b'\n')?;
         let line: Vec<u8> = self.0.drain(..=end).collect();
-        Some(String::from_utf8_lossy(&line[..end]).trim_end_matches('\r').to_string())
+        Some(
+            String::from_utf8_lossy(&line[..end])
+                .trim_end_matches('\r')
+                .to_string(),
+        )
     }
 }
 
@@ -225,7 +241,9 @@ async fn post(cfg: &LlmConfig, body: &Value) -> Result<Response, AppError> {
     }
     let body = response.text().await.map_err(network_error)?;
     let excerpt: String = body.trim().chars().take(ERROR_BODY_MAX_CHARS).collect();
-    Err(AppError::Llm(format!("The LLM server answered HTTP {status}: {excerpt}")))
+    Err(AppError::Llm(format!(
+        "The LLM server answered HTTP {status}: {excerpt}"
+    )))
 }
 
 /// Sends one chat completion request and returns the text of the first choice.
@@ -251,9 +269,10 @@ pub async fn complete(
 pub async fn stream(
     cfg: &LlmConfig,
     messages: &[ChatMessage],
+    json_mode: bool,
     mut on_delta: impl FnMut(&str),
 ) -> Result<String, AppError> {
-    let mut body = request_body(&cfg.model, messages, false);
+    let mut body = request_body(&cfg.model, messages, json_mode);
     body["stream"] = json!(true);
     let mut response = post(cfg, &body).await?;
 
@@ -314,7 +333,10 @@ mod tests {
     const OK_BODY: &str = r#"{"choices":[{"message":{"role":"assistant","content":"hello"}}]}"#;
 
     /// Serves one canned HTTP response. Returns the base URL and the raw request that arrived.
-    async fn serve_once(status_line: &str, body: &str) -> (String, tokio::task::JoinHandle<String>) {
+    async fn serve_once(
+        status_line: &str,
+        body: &str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
         let reply = format!(
@@ -344,7 +366,10 @@ mod tests {
                 .await
                 .unwrap();
             for piece in pieces {
-                socket.write_all(format!("{:x}\r\n", piece.len()).as_bytes()).await.unwrap();
+                socket
+                    .write_all(format!("{:x}\r\n", piece.len()).as_bytes())
+                    .await
+                    .unwrap();
                 socket.write_all(&piece).await.unwrap();
                 socket.write_all(b"\r\n").await.unwrap();
                 socket.flush().await.unwrap();
@@ -367,7 +392,10 @@ mod tests {
                 let length = head
                     .to_lowercase()
                     .lines()
-                    .find_map(|line| line.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap()))
+                    .find_map(|line| {
+                        line.strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().unwrap())
+                    })
                     .unwrap_or(0);
                 if body.len() >= length {
                     return text.into_owned();
@@ -424,7 +452,11 @@ mod tests {
 
     #[test]
     fn azure_url_rejects_text_that_is_not_an_absolute_url() {
-        for bad in ["not a url", "res.cognitiveservices.azure.com", "mailto:a@b.c"] {
+        for bad in [
+            "not a url",
+            "res.cognitiveservices.azure.com",
+            "mailto:a@b.c",
+        ] {
             let error = endpoint_url(Provider::Azure, bad).unwrap_err();
             assert!(matches!(error, AppError::Invalid(_)), "{bad}: {error}");
         }
@@ -434,7 +466,10 @@ mod tests {
     async fn posts_to_chat_completions_and_returns_first_choice() {
         let (result, request) = call("200 OK", OK_BODY, "k", false).await;
         assert_eq!(result.unwrap(), "hello");
-        assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"), "{request}");
+        assert!(
+            request.starts_with("POST /v1/chat/completions HTTP/1.1"),
+            "{request}"
+        );
     }
 
     #[tokio::test]
@@ -456,16 +491,27 @@ mod tests {
     #[tokio::test]
     async fn json_mode_adds_response_format() {
         let (_, request) = call("200 OK", OK_BODY, "k", true).await;
-        assert_eq!(json_body(&request)["response_format"], json!({ "type": "json_object" }));
+        assert_eq!(
+            json_body(&request)["response_format"],
+            json!({ "type": "json_object" })
+        );
     }
 
     #[tokio::test]
     async fn sends_bearer_header_only_when_key_is_set() {
         let (_, with_key) = call("200 OK", OK_BODY, "secret", false).await;
-        assert!(with_key.to_lowercase().contains("authorization: bearer secret\r\n"), "{with_key}");
+        assert!(
+            with_key
+                .to_lowercase()
+                .contains("authorization: bearer secret\r\n"),
+            "{with_key}"
+        );
 
         let (_, without_key) = call("200 OK", OK_BODY, "", false).await;
-        assert!(!without_key.to_lowercase().contains("authorization"), "{without_key}");
+        assert!(
+            !without_key.to_lowercase().contains("authorization"),
+            "{without_key}"
+        );
     }
 
     #[tokio::test]
@@ -478,9 +524,18 @@ mod tests {
         let result = complete(&cfg, "be brief", "say hi", false).await;
         let request = server.await.unwrap();
         assert_eq!(result.unwrap(), "hello");
-        assert!(request.starts_with("POST /openai/v1/chat/completions HTTP/1.1"), "{request}");
-        assert!(request.to_lowercase().contains("api-key: secret\r\n"), "{request}");
-        assert!(!request.to_lowercase().contains("authorization"), "{request}");
+        assert!(
+            request.starts_with("POST /openai/v1/chat/completions HTTP/1.1"),
+            "{request}"
+        );
+        assert!(
+            request.to_lowercase().contains("api-key: secret\r\n"),
+            "{request}"
+        );
+        assert!(
+            !request.to_lowercase().contains("authorization"),
+            "{request}"
+        );
     }
 
     #[tokio::test]
@@ -495,7 +550,12 @@ mod tests {
     #[tokio::test]
     async fn malformed_json_is_a_shape_error() {
         let (result, _) = call("200 OK", "<html>not json</html>", "k", false).await;
-        assert!(result.unwrap_err().to_string().contains("Unexpected response"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unexpected response")
+        );
     }
 
     #[tokio::test]
@@ -505,7 +565,12 @@ mod tests {
 
         let empty = r#"{"choices":[{"message":{"content":""}}]}"#;
         let (empty_content, _) = call("200 OK", empty, "k", false).await;
-        assert!(empty_content.unwrap_err().to_string().contains("empty answer"));
+        assert!(
+            empty_content
+                .unwrap_err()
+                .to_string()
+                .contains("empty answer")
+        );
     }
 
     #[tokio::test]
@@ -524,12 +589,19 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
         drop(listener);
-        let error = complete(&config(&base_url, ""), "s", "u", false).await.unwrap_err().to_string();
+        let error = complete(&config(&base_url, ""), "s", "u", false)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(error.starts_with("Network error"), "{error}");
     }
 
     fn event(content: &str) -> Vec<u8> {
-        format!("data: {}\n\n", json!({ "choices": [{ "delta": { "content": content } }] })).into_bytes()
+        format!(
+            "data: {}\n\n",
+            json!({ "choices": [{ "delta": { "content": content } }] })
+        )
+        .into_bytes()
     }
 
     fn conversation() -> Vec<ChatMessage> {
@@ -543,10 +615,16 @@ mod tests {
 
     /// Runs `stream` against a server that sends `pieces`. Returns the result, the deltas
     /// and the raw request.
-    async fn stream_call(pieces: Vec<Vec<u8>>) -> (Result<String, AppError>, Vec<String>, String) {
+    async fn stream_call(
+        pieces: Vec<Vec<u8>>,
+        json_mode: bool,
+    ) -> (Result<String, AppError>, Vec<String>, String) {
         let (base_url, server) = serve_pieces(pieces).await;
         let mut deltas = Vec::new();
-        let result = stream(&config(&base_url, "k"), &conversation(), |d| deltas.push(d.to_string())).await;
+        let result = stream(&config(&base_url, "k"), &conversation(), json_mode, |d| {
+            deltas.push(d.to_string())
+        })
+        .await;
         (result, deltas, server.await.unwrap())
     }
 
@@ -555,14 +633,17 @@ mod tests {
         let role_only = b"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n".to_vec();
         let no_choices = b"data: {\"choices\":[]}\n\n".to_vec();
         let two_events = [event("lo "), event("wor")].concat();
-        let (result, deltas, _) = stream_call(vec![
-            no_choices,
-            role_only,
-            event("hel"),
-            two_events,
-            event("ld"),
-            b"data: [DONE]\n\n".to_vec(),
-        ])
+        let (result, deltas, _) = stream_call(
+            vec![
+                no_choices,
+                role_only,
+                event("hel"),
+                two_events,
+                event("ld"),
+                b"data: [DONE]\n\n".to_vec(),
+            ],
+            false,
+        )
         .await;
         assert_eq!(result.unwrap(), "hello world");
         assert_eq!(deltas, ["hel", "lo ", "wor", "ld"]);
@@ -570,8 +651,11 @@ mod tests {
 
     #[tokio::test]
     async fn stream_request_has_stream_true_and_all_messages_in_order() {
-        let (_, _, request) = stream_call(vec![event("hi")]).await;
-        assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"), "{request}");
+        let (_, _, request) = stream_call(vec![event("hi")], false).await;
+        assert!(
+            request.starts_with("POST /v1/chat/completions HTTP/1.1"),
+            "{request}"
+        );
         assert_eq!(
             json_body(&request),
             json!({
@@ -588,19 +672,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_json_mode_adds_response_format() {
+        let (_, _, request) = stream_call(vec![event("hi")], true).await;
+        let body = json_body(&request);
+        assert_eq!(body["response_format"], json!({ "type": "json_object" }));
+        assert_eq!(body["stream"], json!(true));
+    }
+
+    #[tokio::test]
     async fn stream_joins_a_line_and_a_character_split_across_chunks() {
         let line = event("h\u{e9}llo");
         // Split inside the two bytes of "é" and inside the JSON text.
         let cut = line.iter().position(|&b| b == 0xC3).unwrap() + 1;
-        let (result, deltas, _) = stream_call(vec![line[..cut].to_vec(), line[cut..].to_vec()]).await;
+        let (result, deltas, _) =
+            stream_call(vec![line[..cut].to_vec(), line[cut..].to_vec()], false).await;
         assert_eq!(result.unwrap(), "h\u{e9}llo");
         assert_eq!(deltas, ["h\u{e9}llo"]);
     }
 
     #[tokio::test]
     async fn stream_ignores_everything_after_done() {
-        let (result, deltas, _) =
-            stream_call(vec![event("a"), b"data: [DONE]\n\n".to_vec(), event("late")]).await;
+        let (result, deltas, _) = stream_call(
+            vec![event("a"), b"data: [DONE]\n\n".to_vec(), event("late")],
+            false,
+        )
+        .await;
         assert_eq!(result.unwrap(), "a");
         assert_eq!(deltas, ["a"]);
     }
@@ -608,35 +704,40 @@ mod tests {
     #[tokio::test]
     async fn stream_accepts_an_end_without_done_and_without_a_final_line_break() {
         let last = br#"data: {"choices":[{"delta":{"content":"b"}}]}"#.to_vec();
-        let (result, _, _) = stream_call(vec![event("a"), last]).await;
+        let (result, _, _) = stream_call(vec![event("a"), last], false).await;
         assert_eq!(result.unwrap(), "ab");
     }
 
     #[tokio::test]
     async fn stream_cut_off_by_the_output_limit_is_an_error() {
         let cut = b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n".to_vec();
-        let (result, _, _) = stream_call(vec![event("partial"), cut]).await;
+        let (result, _, _) = stream_call(vec![event("partial"), cut], false).await;
         assert!(result.unwrap_err().to_string().contains("cut off"));
     }
 
     #[tokio::test]
     async fn stream_without_text_is_an_empty_answer_error() {
-        let (result, _, _) = stream_call(vec![b"data: [DONE]\n\n".to_vec()]).await;
+        let (result, _, _) = stream_call(vec![b"data: [DONE]\n\n".to_vec()], false).await;
         assert!(result.unwrap_err().to_string().contains("empty answer"));
-        let (result, _, _) = stream_call(vec![event("  \n")]).await;
+        let (result, _, _) = stream_call(vec![event("  \n")], false).await;
         assert!(result.unwrap_err().to_string().contains("empty answer"));
     }
 
     #[tokio::test]
     async fn stream_with_malformed_json_is_a_shape_error() {
-        let (result, _, _) = stream_call(vec![b"data: <html>\n\n".to_vec()]).await;
-        assert!(result.unwrap_err().to_string().contains("Unexpected response"));
+        let (result, _, _) = stream_call(vec![b"data: <html>\n\n".to_vec()], false).await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unexpected response")
+        );
     }
 
     #[tokio::test]
     async fn stream_reports_a_non_success_status_like_complete() {
         let (base_url, server) = serve_once("401 Unauthorized", &"x".repeat(500)).await;
-        let result = stream(&config(&base_url, "k"), &conversation(), |_| {}).await;
+        let result = stream(&config(&base_url, "k"), &conversation(), false, |_| {}).await;
         server.await.unwrap();
         let error = result.unwrap_err().to_string();
         assert!(error.contains("HTTP 401 Unauthorized"), "{error}");
@@ -650,12 +751,21 @@ mod tests {
             provider: Provider::Azure,
             ..config(&format!("{base_url}/openai/deployments/dep"), "secret")
         };
-        let result = stream(&cfg, &conversation(), |_| {}).await;
+        let result = stream(&cfg, &conversation(), false, |_| {}).await;
         let request = server.await.unwrap();
         assert_eq!(result.unwrap(), "ok");
-        assert!(request.starts_with("POST /openai/v1/chat/completions HTTP/1.1"), "{request}");
-        assert!(request.to_lowercase().contains("api-key: secret\r\n"), "{request}");
-        assert!(!request.to_lowercase().contains("authorization"), "{request}");
+        assert!(
+            request.starts_with("POST /openai/v1/chat/completions HTTP/1.1"),
+            "{request}"
+        );
+        assert!(
+            request.to_lowercase().contains("api-key: secret\r\n"),
+            "{request}"
+        );
+        assert!(
+            !request.to_lowercase().contains("authorization"),
+            "{request}"
+        );
     }
 
     #[test]
@@ -683,8 +793,12 @@ mod tests {
     #[test]
     fn chat_roles_are_lowercase_in_json() {
         let message = ChatMessage::new(Role::Assistant, "x");
-        assert_eq!(serde_json::to_value(&message).unwrap(), json!({ "role": "assistant", "content": "x" }));
-        let parsed: ChatMessage = serde_json::from_value(json!({ "role": "user", "content": "y" })).unwrap();
+        assert_eq!(
+            serde_json::to_value(&message).unwrap(),
+            json!({ "role": "assistant", "content": "x" })
+        );
+        let parsed: ChatMessage =
+            serde_json::from_value(json!({ "role": "user", "content": "y" })).unwrap();
         assert_eq!(parsed, ChatMessage::new(Role::User, "y"));
     }
 }

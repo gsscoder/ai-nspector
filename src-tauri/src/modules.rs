@@ -6,13 +6,14 @@ use std::io;
 use std::mem;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 use crate::error::AppError;
-use crate::overview::BRIEF_FILE;
+use crate::llm::{ChatMessage, Role};
+use crate::overview::{BRIEF_FILE, prompt_tokens};
 use crate::parse::{ProjectStructure, analyze_project};
 use crate::scan::{Project, scan_repo};
 use crate::settings::load_llm_config;
@@ -62,6 +63,28 @@ struct Progress {
 
 pub(crate) fn progress(app: &AppHandle, stage: &'static str) {
     let _ = app.emit("modules-progress", Progress { stage });
+}
+
+#[derive(Serialize, Clone)]
+struct ChatDelta<'a> {
+    text: &'a str,
+}
+
+/// Sends one piece of the streamed model answer to the UI.
+pub(crate) fn delta(app: &AppHandle, text: &str) {
+    let _ = app.emit("chat-delta", ChatDelta { text });
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PromptStats {
+    files: usize,
+    tokens: usize,
+}
+
+/// Tells the UI the size of the prompt before the first model call.
+pub(crate) fn prompt_stats(app: &AppHandle, files: usize, tokens: usize) {
+    let _ = app.emit("prompt-stats", PromptStats { files, tokens });
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -124,7 +147,7 @@ fn build_prompt(structure: &ProjectStructure, brief: Option<&str>) -> Result<Str
         .unwrap_or_default();
     for with_symbols in [true, false] {
         let prompt = format!("{brief_block}{}", user_prompt(structure, with_symbols));
-        if (prompt.len() + SYSTEM_PROMPT.len()) / 4 <= MAX_PROMPT_TOKENS {
+        if prompt_tokens(SYSTEM_PROMPT, &prompt) <= MAX_PROMPT_TOKENS {
             return Ok(prompt);
         }
     }
@@ -340,6 +363,7 @@ pub async fn generate_modules(
     repo_path: String,
     project_id: String,
 ) -> Result<ModulesFile, AppError> {
+    let started = Instant::now();
     let _run = RunGuard::acquire()?;
     CANCEL.store(false, Ordering::SeqCst);
     let cfg = load_llm_config(&app)?;
@@ -362,12 +386,21 @@ pub async fn generate_modules(
         return Err(AppError::Invalid("The project has no source files.".into()));
     }
     let prompt = build_prompt(&structure, brief.as_deref())?;
+    prompt_stats(
+        &app,
+        structure.files.len(),
+        prompt_tokens(SYSTEM_PROMPT, &prompt),
+    );
 
+    let messages = [
+        ChatMessage::new(Role::System, SYSTEM_PROMPT),
+        ChatMessage::new(Role::User, &prompt),
+    ];
     let mut retried = false;
     loop {
         progress(&app, if retried { "Retrying" } else { "Calling model" });
         let answer = tokio::select! {
-            r = crate::llm::complete(&cfg, SYSTEM_PROMPT, &prompt, true) => r?,
+            r = crate::llm::stream(&cfg, &messages, true, |text| delta(&app, text)) => r?,
             _ = wait_cancel() => return Err(AppError::Cancelled),
         };
         progress(&app, "Validating");
@@ -380,6 +413,7 @@ pub async fn generate_modules(
                     generated_at: store::now_rfc3339(),
                     modules,
                     outdated: false,
+                    duration_secs: Some(started.elapsed().as_secs()),
                 };
                 store::save(Path::new(&repo_dir), &project.id, &mut file)?;
                 return Ok(file);

@@ -9,6 +9,7 @@ import type {
   OverviewInfo,
   ProjectAnalysisProgress,
   ProjectReport,
+  PromptStats,
   Repo,
 } from "@/types";
 
@@ -50,6 +51,10 @@ export const createProjectAgentPrompt = (repoPath: string, projectId: string, fi
 // Returns the unlisten function.
 export const onChatDelta = (cb: (text: string) => void) =>
   listen<{ text: string }>("chat-delta", (e) => cb(e.payload.text));
+
+// Returns the unlisten function.
+export const onPromptStats = (cb: (stats: PromptStats) => void) =>
+  listen<PromptStats>("prompt-stats", (e) => cb(e.payload));
 
 // Returns the unlisten function.
 export const onProjectAnalysisProgress = (cb: (progress: ProjectAnalysisProgress) => void) =>

@@ -40,6 +40,9 @@ pub struct ModulesFile {
     /// Computed on load; always stored as `false`.
     #[serde(default)]
     pub outdated: bool,
+    /// Seconds from the start of the generation to the save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u64>,
 }
 
 /// FNV-1a: stable across Rust versions (unlike `DefaultHasher`), so a stored key stays valid.
@@ -250,6 +253,7 @@ mod tests {
                 }],
             }],
             outdated: true,
+            duration_secs: Some(12),
         };
         assert_eq!(load(dir.path(), "package.json").unwrap(), None);
         save(dir.path(), "package.json", &mut file).unwrap();
@@ -260,6 +264,39 @@ mod tests {
         let loaded = load(dir.path(), "package.json").unwrap().unwrap();
         assert_eq!(loaded, file);
         assert!(!loaded.outdated);
+        assert_eq!(loaded.duration_secs, Some(12));
+    }
+
+    #[test]
+    fn a_file_without_duration_secs_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(modules_dir(dir.path())).unwrap();
+        fs::write(
+            modules_dir(dir.path()).join(file_name("package.json")),
+            r#"{"project":"demo","cacheKey":"fp:1","model":"m","generatedAt":"2023-11-14T22:13:20Z","modules":[]}"#,
+        )
+        .unwrap();
+
+        let loaded = load(dir.path(), "package.json").unwrap().unwrap();
+
+        assert_eq!(loaded.duration_secs, None);
+    }
+
+    #[test]
+    fn a_missing_duration_secs_is_not_serialized() {
+        let file = ModulesFile {
+            project: "demo".into(),
+            cache_key: "fp:1".into(),
+            model: "m".into(),
+            generated_at: "2023-11-14T22:13:20Z".into(),
+            modules: vec![],
+            outdated: false,
+            duration_secs: None,
+        };
+
+        let json = serde_json::to_string(&file).unwrap();
+
+        assert!(!json.contains("durationSecs"), "{json}");
     }
 
     #[test]

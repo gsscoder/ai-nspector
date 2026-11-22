@@ -73,8 +73,9 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
 
 fn read_settings(path: &Path) -> Result<LlmSettings, AppError> {
     match fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text)
-            .map_err(|e| AppError::Json(format!("Settings file {} is not valid", path.display()), e)),
+        Ok(text) => serde_json::from_str(&text).map_err(|e| {
+            AppError::Json(format!("Settings file {} is not valid", path.display()), e)
+        }),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(LlmSettings::default()),
         Err(e) => Err(AppError::Io(format!("Cannot read {}", path.display()), e)),
     }
@@ -129,7 +130,10 @@ fn apply_api_key_change(user: &str, change: Option<&str>) -> Result<(), AppError
             )),
         },
         Some(key) => key_entry(user)?.set_password(key).map_err(|e| {
-            AppError::Platform("Cannot save the API key in the OS credential store".into(), e.into())
+            AppError::Platform(
+                "Cannot save the API key in the OS credential store".into(),
+                e.into(),
+            )
         }),
     }
 }
@@ -219,7 +223,10 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"baseUrl\""));
         assert!(!text.to_lowercase().contains("key"));
-        assert_eq!(read_settings(&path).unwrap(), settings("http://localhost:11434/v1", "llama3"));
+        assert_eq!(
+            read_settings(&path).unwrap(),
+            settings("http://localhost:11434/v1", "llama3")
+        );
     }
 
     #[test]
@@ -233,15 +240,21 @@ mod tests {
 
     #[test]
     fn config_requires_base_url_then_model() {
-        let no_url = require_complete(settings("", "m"), String::new()).err().unwrap();
+        let no_url = require_complete(settings("", "m"), String::new())
+            .err()
+            .unwrap();
         assert!(no_url.to_string().contains("base URL"));
-        let no_model = require_complete(settings("http://x", ""), String::new()).err().unwrap();
+        let no_model = require_complete(settings("http://x", ""), String::new())
+            .err()
+            .unwrap();
         assert!(no_model.to_string().contains("model"));
     }
 
     #[test]
     fn config_accepts_an_empty_key() {
-        let config = require_complete(settings("http://x", "m"), String::new()).ok().unwrap();
+        let config = require_complete(settings("http://x", "m"), String::new())
+            .ok()
+            .unwrap();
         assert_eq!(config.api_key, "");
     }
 

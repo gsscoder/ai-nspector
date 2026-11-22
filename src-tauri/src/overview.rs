@@ -8,14 +8,17 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::Ordering;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::error::AppError;
 use crate::files::read_repo_file;
-use crate::modules::{CANCEL, MAX_PROMPT_TOKENS, RunGuard, progress, wait_cancel};
+use crate::llm::{self, ChatMessage, Role};
+use crate::modules::{
+    CANCEL, MAX_PROMPT_TOKENS, RunGuard, delta, progress, prompt_stats, wait_cancel,
+};
 use crate::scan::{DocFile, Language, Project, scan_repo};
 use crate::settings::{LlmConfig, load_llm_config};
 use crate::store::{self, Module};
@@ -93,6 +96,9 @@ pub struct OverviewInfo {
     pub generated_at: String,
     /// The doc files of a documented run; empty for an inferred run.
     pub files: Vec<String>,
+    /// Seconds from the start of the generation to the save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u64>,
 }
 
 /// Why the overview answer is not accepted.
@@ -302,7 +308,7 @@ fn user_prompt(projects: &[Project], docs: &[DocText]) -> String {
 }
 
 /// tokens ≈ chars / 4, like the module prompt.
-fn prompt_tokens(system_prompt: &str, user_prompt: &str) -> usize {
+pub(crate) fn prompt_tokens(system_prompt: &str, user_prompt: &str) -> usize {
     (system_prompt.len() + user_prompt.len()) / 4
 }
 
@@ -416,7 +422,8 @@ fn fit_inferred_prompt(inputs: &[ProjectInput]) -> Result<String, AppError> {
     )))
 }
 
-fn build_inferred_prompt(repo: &Path) -> Result<String, AppError> {
+/// The prompt and the number of project files its structure describes.
+fn build_inferred_prompt(repo: &Path) -> Result<(String, usize), AppError> {
     let scanned = scan_repo(repo)?;
     if scanned.projects.is_empty() {
         return Err(AppError::Invalid(
@@ -428,7 +435,8 @@ fn build_inferred_prompt(repo: &Path) -> Result<String, AppError> {
         .iter()
         .map(|project| load_project_input(repo, project))
         .collect();
-    fit_inferred_prompt(&inputs)
+    let files = scanned.projects.iter().map(|p| p.files.len()).sum();
+    Ok((fit_inferred_prompt(&inputs)?, files))
 }
 
 /// Inferring takes no file list: the structure is the only input.
@@ -442,16 +450,34 @@ fn select_mode(files: &[String], infer: bool) -> Result<Mode, AppError> {
     }
 }
 
-fn build_user_prompt(repo: &Path, mode: Mode, files: Vec<String>) -> Result<String, AppError> {
+/// The prompt and the number of files it describes: the selected docs, or the project files.
+fn build_user_prompt(
+    repo: &Path,
+    mode: Mode,
+    files: Vec<String>,
+) -> Result<(String, usize), AppError> {
     match mode {
-        Mode::Documented => build_prompt(repo, files),
+        Mode::Documented => {
+            let count = files.len();
+            Ok((build_prompt(repo, files)?, count))
+        }
         Mode::Inferred => build_inferred_prompt(repo),
     }
 }
 
-async fn ask(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, AppError> {
+/// Streams the answer to the UI as `chat-delta` events. Cancel drops the request.
+async fn ask(
+    app: &AppHandle,
+    cfg: &LlmConfig,
+    system: &str,
+    user: &str,
+) -> Result<String, AppError> {
+    let messages = [
+        ChatMessage::new(Role::System, system),
+        ChatMessage::new(Role::User, user),
+    ];
     tokio::select! {
-        answer = crate::llm::complete(cfg, system, user, false) => answer,
+        answer = llm::stream(cfg, &messages, false, |text| delta(app, text)) => answer,
         _ = wait_cancel() => Err(AppError::Cancelled),
     }
 }
@@ -472,7 +498,7 @@ async fn request_overview(
                 "Writing overview"
             },
         );
-        let answer = ask(cfg, mode.system_prompt(), prompt).await?;
+        let answer = ask(app, cfg, mode.system_prompt(), prompt).await?;
         progress(app, "Validating");
         match mode.validate(&answer) {
             Ok(overview) => return Ok(overview),
@@ -482,9 +508,13 @@ async fn request_overview(
     }
 }
 
-async fn request_brief(cfg: &LlmConfig, overview: &str) -> Result<String, AppError> {
+async fn request_brief(
+    app: &AppHandle,
+    cfg: &LlmConfig,
+    overview: &str,
+) -> Result<String, AppError> {
     let input = format!("<<<OVERVIEW>>>\n{overview}\n<<<END OVERVIEW>>>\n");
-    validate_brief(&ask(cfg, BRIEF_PROMPT, &input).await?)
+    validate_brief(&ask(app, cfg, BRIEF_PROMPT, &input).await?)
 }
 
 /// Writes the overview, the brief and the metadata to temp names, then renames them over the old
@@ -494,10 +524,12 @@ fn save(
     overview: &str,
     brief: &str,
     selected: &[String],
+    duration_secs: u64,
 ) -> Result<OverviewInfo, AppError> {
     let info = OverviewInfo {
         generated_at: store::rfc3339(SystemTime::now()),
         files: selected.to_vec(),
+        duration_secs: Some(duration_secs),
     };
     let meta = serde_json::to_string_pretty(&info)
         .map_err(|e| AppError::Json("Cannot serialize the overview metadata".into(), e))?;
@@ -554,6 +586,7 @@ pub async fn generate_overview(
     files: Vec<String>,
     infer: bool,
 ) -> Result<OverviewInfo, AppError> {
+    let started = Instant::now();
     let mode = select_mode(&files, infer)?;
     let _run = RunGuard::acquire()?;
     CANCEL.store(false, Ordering::SeqCst);
@@ -563,20 +596,26 @@ pub async fn generate_overview(
     let repo_dir = repo_path.clone();
     // Empty when inferring: `select_mode` accepts no files then.
     let selected = files.clone();
-    let prompt = tauri::async_runtime::spawn_blocking(move || {
+    let (prompt, prompt_files) = tauri::async_runtime::spawn_blocking(move || {
         build_user_prompt(Path::new(&repo_path), mode, files)
     })
     .await
     .map_err(|e| AppError::Platform("Reading did not finish".into(), e.into()))??;
+    prompt_stats(
+        &app,
+        prompt_files,
+        prompt_tokens(mode.system_prompt(), &prompt),
+    );
 
     let overview = request_overview(&app, &cfg, mode, &prompt).await?;
     progress(&app, "Writing brief");
-    let brief = request_brief(&cfg, &overview).await?;
+    let brief = request_brief(&app, &cfg, &overview).await?;
     save(
         Path::new(&repo_dir),
         &mode.stored_overview(&overview),
         &brief,
         &selected,
+        started.elapsed().as_secs(),
     )
 }
 
@@ -816,7 +855,7 @@ mod tests {
     fn save_drops_line_end_periods_from_the_overview_and_the_brief() {
         let dir = tempfile::tempdir().unwrap();
 
-        save(dir.path(), "## Status\nBeta.\n", "- one.\n- two...", &[]).unwrap();
+        save(dir.path(), "## Status\nBeta.\n", "- one.\n- two...", &[], 0).unwrap();
 
         let store_dir = dir.path().join(".ainspector");
         assert_eq!(
@@ -1088,11 +1127,12 @@ mod tests {
                 generated_at: "2026-11-14T10:00:00Z".into(),
                 modules: vec![module("Billing", "Invoices and tax")],
                 outdated: false,
+                duration_secs: None,
             },
         )
         .unwrap();
 
-        let prompt = build_inferred_prompt(dir.path()).unwrap();
+        let (prompt, files) = build_inferred_prompt(dir.path()).unwrap();
 
         assert!(
             prompt.contains(
@@ -1109,6 +1149,7 @@ mod tests {
         assert!(prompt.contains("loose.py"), "{prompt}");
         assert!(!prompt.contains("MANIFEST (other)"), "{prompt}");
         assert!(!prompt.contains("api_key_in_source"), "{prompt}");
+        assert_eq!(files, 2);
         assert!(!prompt.contains("password_in_source"), "{prompt}");
     }
 
@@ -1131,6 +1172,7 @@ mod tests {
                 generated_at: "2026-11-14T10:00:00Z".into(),
                 modules: vec![module("Billing", "Invoices")],
                 outdated: false,
+                duration_secs: None,
             },
         )
         .unwrap();
@@ -1155,6 +1197,11 @@ mod tests {
 
         assert!(matches!(error, AppError::Invalid(_)), "{error}");
         assert!(error.to_string().contains("No project found"), "{error}");
+    }
+
+    #[test]
+    fn prompt_tokens_is_the_total_chars_over_four() {
+        assert_eq!(prompt_tokens(&"s".repeat(40), &"u".repeat(63)), 25);
     }
 
     fn write_files(root: &Path, files: &[(&str, &str)]) {
@@ -1223,6 +1270,7 @@ mod tests {
             "overview text",
             "- brief",
             &paths(&["README.md"]),
+            7,
         )
         .unwrap();
 
@@ -1244,6 +1292,7 @@ mod tests {
             assert!(!store_dir.join(format!("{name}.tmp")).exists(), "{name}");
         }
         assert_eq!(info.files, ["README.md"]);
+        assert_eq!(info.duration_secs, Some(7));
         assert_eq!(
             load_overview(dir.path().to_string_lossy().into_owned()).unwrap(),
             Some(info)
@@ -1253,11 +1302,11 @@ mod tests {
     #[test]
     fn save_overwrites_the_old_files_and_keeps_a_custom_gitignore() {
         let dir = tempfile::tempdir().unwrap();
-        save(dir.path(), "old overview", "- old", &[]).unwrap();
+        save(dir.path(), "old overview", "- old", &[], 0).unwrap();
         let store_dir = dir.path().join(".ainspector");
         fs::write(store_dir.join(".gitignore"), "custom\n").unwrap();
 
-        save(dir.path(), "new overview", "- new", &[]).unwrap();
+        save(dir.path(), "new overview", "- new", &[], 0).unwrap();
 
         assert_eq!(
             fs::read_to_string(store_dir.join(OVERVIEW_FILE)).unwrap(),
@@ -1276,12 +1325,12 @@ mod tests {
     #[test]
     fn a_failed_write_leaves_the_old_files_untouched() {
         let dir = tempfile::tempdir().unwrap();
-        let old = save(dir.path(), "old overview", "- old", &paths(&["old.md"])).unwrap();
+        let old = save(dir.path(), "old overview", "- old", &paths(&["old.md"]), 0).unwrap();
         let store_dir = dir.path().join(".ainspector");
         // A folder on the temp name makes the last temp write fail.
         fs::create_dir(store_dir.join("overview.json.tmp")).unwrap();
 
-        assert!(save(dir.path(), "new overview", "- new", &paths(&["new.md"])).is_err());
+        assert!(save(dir.path(), "new overview", "- new", &paths(&["new.md"]), 0).is_err());
 
         assert_eq!(
             fs::read_to_string(store_dir.join(OVERVIEW_FILE)).unwrap(),
@@ -1353,8 +1402,35 @@ mod tests {
             Some(OverviewInfo {
                 generated_at: "2023-11-14T22:13:20Z".into(),
                 files: paths(&["README.md", "docs/a.md"]),
+                duration_secs: None,
             })
         );
+    }
+
+    #[test]
+    fn load_overview_reads_the_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        write_stored_overview(
+            dir.path(),
+            r#"{"generatedAt":"2023-11-14T22:13:20Z","files":[],"durationSecs":42}"#,
+        );
+
+        let info = load_overview(dir.path().to_string_lossy().into_owned()).unwrap();
+
+        assert_eq!(info.and_then(|i| i.duration_secs), Some(42));
+    }
+
+    #[test]
+    fn a_missing_duration_is_not_serialized() {
+        let info = OverviewInfo {
+            generated_at: "2023-11-14T22:13:20Z".into(),
+            files: vec![],
+            duration_secs: None,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+
+        assert!(!json.contains("durationSecs"), "{json}");
     }
 
     #[test]
@@ -1362,12 +1438,13 @@ mod tests {
         for selected in [paths(&["README.md", "docs/a.md"]), vec![]] {
             let dir = tempfile::tempdir().unwrap();
 
-            save(dir.path(), "overview", "- brief", &selected).unwrap();
+            save(dir.path(), "overview", "- brief", &selected, 3).unwrap();
 
             let info = load_overview(dir.path().to_string_lossy().into_owned())
                 .unwrap()
                 .unwrap();
             assert_eq!(info.files, selected);
+            assert_eq!(info.duration_secs, Some(3));
             assert!(info.generated_at.ends_with('Z'), "{}", info.generated_at);
         }
     }

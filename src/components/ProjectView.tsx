@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Boxes, LayoutGrid, Network, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import GenerationProgress from "@/components/GenerationProgress";
 import LlmHint from "@/components/LlmHint";
 import ModuleGraph from "@/components/ModuleGraph";
 import ProjectAnalysisPanel from "@/components/ProjectAnalysisPanel";
 import ProjectReportView from "@/components/ProjectReportView";
-import { cancelGeneration, generateModules, listAnalyses, loadModules, onModulesProgress } from "@/api";
+import { generateModules, listAnalyses, loadModules } from "@/api";
 import { useLlmBlocked } from "@/lib/llmConfigured";
 import { projectLabel } from "@/lib/project";
+import { useGeneration } from "@/lib/useGeneration";
 import type { AnalysisInfo, ModulesFile, OverviewInfo, Project, ProjectReport } from "@/types";
 
 // Backend texts about the LLM server, the network or the API key store (see error.rs, llm.rs, settings.rs).
@@ -35,15 +37,13 @@ export default function ProjectView({
   data: ModulesFile | null;
   setData: (d: ModulesFile | null) => void;
 }) {
-  const [stage, setStage] = useState<string | null>(null); // non-null while generating
   const [error, setError] = useState<string | null>(null);
-  const [seconds, setSeconds] = useState(0);
   const [view, setView] = useState<View>("cards");
   const [analyses, setAnalyses] = useState<AnalysisInfo[]>([]);
   const [finished, setFinished] = useState<{ report: ProjectReport; requested: number } | null>(null);
   const llmBlocked = useLlmBlocked();
+  const generation = useGeneration();
   const mounted = useRef(false); // a run that outlives this view must not touch the shared state
-  const unlisten = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let stale = false;
@@ -66,36 +66,20 @@ export default function ProjectView({
     };
   }, []);
 
-  const generating = stage !== null;
-  useEffect(() => {
-    if (!generating) return;
-    setSeconds(0);
-    const timer = setInterval(() => setSeconds((n) => n + 1), 1000);
-    return () => clearInterval(timer);
-  }, [generating]);
-
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      unlisten.current?.();
     };
   }, []);
 
+  const generating = generation.generating;
+  const shownError = generation.error ?? error;
+
   async function generate() {
     setError(null);
-    setStage("Starting");
-    try {
-      unlisten.current = await onModulesProgress((s) => mounted.current && setStage(s));
-      const result = await generateModules(repoRoot, project.id);
-      if (mounted.current) setData(result);
-    } catch (e) {
-      if (mounted.current && String(e) !== "Cancelled") setError(String(e));
-    } finally {
-      unlisten.current?.();
-      unlisten.current = null;
-      if (mounted.current) setStage(null);
-    }
+    const result = await generation.run(() => generateModules(repoRoot, project.id));
+    if (result && mounted.current) setData(result);
   }
 
   return (
@@ -115,15 +99,7 @@ export default function ProjectView({
             </span>
           )}
           {generating ? (
-            <>
-              <span className="spinner" />
-              <span role="status" className="text-sm text-muted-foreground tabular-nums">
-                {stage}… {seconds}s
-              </span>
-              <Button variant="outline" onClick={cancelGeneration}>
-                Cancel
-              </Button>
-            </>
+            <GenerationProgress generation={generation} lastDuration={data?.durationSecs} kind="modules" />
           ) : (
             <>
               <LlmHint />
@@ -135,13 +111,13 @@ export default function ProjectView({
           )}
         </div>
       </div>
-      {error && (
+      {shownError && (
         <p role="alert" className="text-sm text-destructive">
-          {error}
-          {LLM_CONNECTION_ERROR.test(error) && " (LLM settings are under Settings.)"}
+          {shownError}
+          {LLM_CONNECTION_ERROR.test(shownError) && " (LLM settings are under Settings.)"}
         </p>
       )}
-      {!data && !generating && !error && (
+      {!data && !generating && !shownError && (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed p-12 text-center">
           <Boxes className="size-6 text-muted-foreground/60" />
           <p className="text-sm text-muted-foreground">No modules yet. Identify them to see how this project is organized.</p>

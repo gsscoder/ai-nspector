@@ -60,6 +60,7 @@ export interface ModulesFile {
   generatedAt: string;
   modules: Module[];
   outdated: boolean;
+  durationSecs?: number;
 }
 
 // from imports to: one module imports another; count is the number of file imports.
@@ -73,6 +74,7 @@ export interface ModuleRelation {
 export interface OverviewInfo {
   generatedAt: string;
   files: string[];
+  durationSecs?: number;
 }
 
 // Mirror the structs in src-tauri/src/analysis.rs. createdAt is RFC 3339.
@@ -97,6 +99,7 @@ export interface ProjectReport {
   createdAt: string;
   cancelled: boolean;
   modules: ModuleReport[];
+  durationSecs: number;
 }
 
 // Payload of the project-analysis-progress event; index is 1-based.
@@ -104,4 +107,10 @@ export interface ProjectAnalysisProgress {
   index: number;
   total: number;
   moduleName: string;
+}
+
+// Payload of the prompt-stats event: files and estimated tokens sent to the LLM.
+export interface PromptStats {
+  files: number;
+  tokens: number;
 }

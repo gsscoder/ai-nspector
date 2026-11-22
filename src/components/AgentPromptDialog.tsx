@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import GenerationProgress from "@/components/GenerationProgress";
 import LlmHint from "@/components/LlmHint";
 import { useLlmBlocked } from "@/lib/llmConfigured";
+import type { Generation } from "@/lib/useGeneration";
 
 export default function AgentPromptDialog({
   prompt,
@@ -15,7 +16,7 @@ export default function AgentPromptDialog({
   onClose,
 }: {
   prompt: string | null; // null until the first generation succeeds
-  progress: { stage: string | null; seconds: number } | null; // null when idle
+  progress: Generation | null; // null when idle
   error: string | null;
   onChange: (text: string) => void;
   onRegenerate: () => void;
@@ -66,7 +67,7 @@ export default function AgentPromptDialog({
         )}
         <div className="flex flex-wrap items-center justify-end gap-2">
           {generating ? (
-            <GenerationProgress stage={progress.stage} seconds={progress.seconds} />
+            <GenerationProgress generation={progress} />
           ) : (
             <>
               <LlmHint />

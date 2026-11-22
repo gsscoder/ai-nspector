@@ -6,6 +6,7 @@
 use std::mem;
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -14,8 +15,8 @@ use crate::error::AppError;
 use crate::files::read_repo_file;
 use crate::llm::{self, ChatMessage, Role};
 use crate::modules::{
-    CANCEL, MAX_PROMPT_TOKENS, RunGuard, find_project, progress, read_brief, user_prompt,
-    wait_cancel,
+    CANCEL, MAX_PROMPT_TOKENS, RunGuard, delta, find_project, progress, prompt_stats, read_brief,
+    user_prompt, wait_cancel,
 };
 use crate::overview::unfence;
 use crate::parse::{ProjectStructure, analyze_project};
@@ -243,11 +244,6 @@ fn build_messages(system: &str, context: &ModuleContext) -> Result<Vec<ChatMessa
     )))
 }
 
-#[derive(Serialize, Clone)]
-struct ChatDelta<'a> {
-    text: &'a str,
-}
-
 /// Streams the answer to the UI as `chat-delta` events. Cancel drops the request.
 async fn stream_answer(
     app: &AppHandle,
@@ -255,9 +251,7 @@ async fn stream_answer(
     messages: &[ChatMessage],
 ) -> Result<String, AppError> {
     tokio::select! {
-        answer = llm::stream(cfg, messages, |text| {
-            let _ = app.emit("chat-delta", ChatDelta { text });
-        }) => answer,
+        answer = llm::stream(cfg, messages, false, |text| delta(app, text)) => answer,
         _ = wait_cancel() => Err(AppError::Cancelled),
     }
 }
@@ -324,6 +318,8 @@ pub struct ProjectReport {
     /// The user cancelled: `modules` holds the modules finished before.
     cancelled: bool,
     modules: Vec<ModuleReport>,
+    /// Seconds from the start of the run to the end.
+    duration_secs: u64,
 }
 
 #[derive(Serialize, Clone)]
@@ -340,6 +336,8 @@ struct ProjectProgress<'a> {
 struct ModuleRequest {
     module_id: String,
     module_name: String,
+    /// Files of the module, for the prompt statistics.
+    files: usize,
     messages: Result<Vec<ChatMessage>, AppError>,
 }
 
@@ -369,6 +367,7 @@ fn prepare_project_run(
         brief = context.brief;
         structure = context.structure;
         requests.push(ModuleRequest {
+            files: context.source.files.len(),
             module_id: mem::take(&mut target.module_id),
             module_name: context.source.module_name,
             messages,
@@ -392,6 +391,7 @@ pub async fn start_project_analysis(
     analysis_id: String,
     module_ids: Vec<String>,
 ) -> Result<ProjectReport, AppError> {
+    let started = Instant::now();
     let analysis = find_analysis(&analysis_id)?;
     let _run = RunGuard::acquire()?;
     CANCEL.store(false, Ordering::SeqCst);
@@ -419,7 +419,11 @@ pub async fn start_project_analysis(
         );
         progress(&app, "Analyzing");
         let outcome = match request.messages {
-            Ok(messages) => stream_answer(&app, &cfg, &messages).await,
+            Ok(messages) => {
+                let chars: usize = messages.iter().map(|message| message.content.len()).sum();
+                prompt_stats(&app, request.files, chars / 4);
+                stream_answer(&app, &cfg, &messages).await
+            }
             Err(error) => Err(error),
         };
         if matches!(outcome, Err(AppError::Cancelled)) {
@@ -438,6 +442,7 @@ pub async fn start_project_analysis(
         created_at: store::now_rfc3339(),
         cancelled,
         modules,
+        duration_secs: started.elapsed().as_secs(),
     })
 }
 
@@ -568,6 +573,7 @@ mod tests {
                 module("other", &[("src/other.ts", true)]),
             ],
             outdated: false,
+            duration_secs: None,
         };
         store::save(dir.path(), "package.json", &mut cache).unwrap();
         dir

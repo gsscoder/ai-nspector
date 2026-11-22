@@ -5,7 +5,7 @@ import AnalysisPanel from "@/components/AnalysisPanel";
 import CodeView from "@/components/CodeView";
 import GenerationProgress from "@/components/GenerationProgress";
 import ProjectReportView from "@/components/ProjectReportView";
-import { listAnalyses, onChatDelta, openInEditor, startProjectAnalysis } from "@/api";
+import { listAnalyses, openInEditor, startProjectAnalysis } from "@/api";
 import { splitPath } from "@/lib/project";
 import { useGeneration } from "@/lib/useGeneration";
 import type { AnalysisInfo, Module, OverviewInfo, ProjectReport } from "@/types";
@@ -28,7 +28,6 @@ export default function ModuleView({
   const [analyses, setAnalyses] = useState<AnalysisInfo[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [report, setReport] = useState<ProjectReport | null>(null);
-  const [streamed, setStreamed] = useState("");
   const generation = useGeneration();
 
   useEffect(() => {
@@ -42,15 +41,7 @@ export default function ModuleView({
   }, []);
 
   async function run(analysisId: string) {
-    const result = await generation.run(async () => {
-      const unlisten = await onChatDelta((text) => setStreamed((s) => s + text));
-      try {
-        return await startProjectAnalysis(repoRoot, projectId, analysisId, [module.id]);
-      } finally {
-        unlisten();
-      }
-    });
-    setStreamed("");
+    const result = await generation.run(() => startProjectAnalysis(repoRoot, projectId, analysisId, [module.id]));
     if (result) setReport(result);
   }
 
@@ -134,9 +125,13 @@ export default function ModuleView({
           <div className="flex shrink-0 flex-col gap-2 rounded-xl border bg-card p-3">
             {generation.generating && (
               <>
-                <GenerationProgress stage={generation.stage} seconds={generation.seconds} />
-                {streamed !== "" && (
-                  <p className="max-h-40 overflow-y-auto text-xs whitespace-pre-wrap text-muted-foreground">{streamed}</p>
+                <GenerationProgress
+                  generation={generation}
+                  lastDuration={report && !report.cancelled ? report.durationSecs : undefined}
+                  kind="findings"
+                />
+                {generation.streamed !== "" && (
+                  <p className="max-h-40 overflow-y-auto text-xs whitespace-pre-wrap text-muted-foreground">{generation.streamed}</p>
                 )}
               </>
             )}

@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Info, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import GenerationProgress from "@/components/GenerationProgress";
 import LlmHint from "@/components/LlmHint";
-import { cancelGeneration, generateOverview, onModulesProgress } from "@/api";
+import { generateOverview } from "@/api";
 import { useLlmBlocked } from "@/lib/llmConfigured";
 import { splitPath } from "@/lib/project";
+import { useGeneration } from "@/lib/useGeneration";
 import type { DocFile, OverviewInfo, Repo } from "@/types";
 
 // Mirrors MAX_PROMPT_TOKENS in src-tauri/src/modules.rs; the backend enforces it too.
@@ -44,26 +46,15 @@ export default function OverviewDialog({
 }) {
   // The parent mounts this dialog on every open, so the selection always starts from the last run's files or the suggested files.
   const [selected, setSelected] = useState(() => initialPaths(repo.docs, overview));
-  const [stage, setStage] = useState<string | null>(null); // non-null while generating
-  const [error, setError] = useState<string | null>(null);
-  const [seconds, setSeconds] = useState(0);
+  const generation = useGeneration();
   const llmBlocked = useLlmBlocked();
   const mounted = useRef(false); // a run that outlives this dialog must not touch the parent state
-  const unlisten = useRef<(() => void) | null>(null);
 
-  const generating = stage !== null;
-  useEffect(() => {
-    if (!generating) return;
-    setSeconds(0);
-    const timer = setInterval(() => setSeconds((n) => n + 1), 1000);
-    return () => clearInterval(timer);
-  }, [generating]);
-
+  const { generating, error } = generation;
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      unlisten.current?.();
     };
   }, []);
 
@@ -79,34 +70,14 @@ export default function OverviewDialog({
   }
 
   async function generate(infer: boolean) {
-    setError(null);
-    setStage("Starting");
-    try {
-      unlisten.current = await onModulesProgress((s) => mounted.current && setStage(s));
-      const result = await generateOverview(
-        repo.root,
-        infer ? [] : files.map((d) => d.path),
-        infer,
-      );
-      if (mounted.current) onGenerated(result);
-    } catch (e) {
-      if (mounted.current && String(e) !== "Cancelled") setError(String(e));
-    } finally {
-      unlisten.current?.();
-      unlisten.current = null;
-      if (mounted.current) setStage(null);
-    }
+    const result = await generation.run(() =>
+      generateOverview(repo.root, infer ? [] : files.map((d) => d.path), infer),
+    );
+    if (result && mounted.current) onGenerated(result);
   }
 
   const noDocs = repo.docs.length === 0;
-  const progress = (
-    <>
-      <span className="spinner" />
-      <span role="status" className="text-sm text-muted-foreground tabular-nums">
-        {stage}… {seconds}s
-      </span>
-    </>
-  );
+  const progress = <GenerationProgress generation={generation} lastDuration={overview?.durationSecs} />;
 
   return (
     <Dialog open onOpenChange={(open) => !open && !generating && onClose()}>
@@ -135,14 +106,16 @@ export default function OverviewDialog({
             <div className="flex items-center gap-2 self-end">
               {generating && progress}
               <LlmHint />
-              <Button variant="outline" onClick={generating ? cancelGeneration : onClose}>
-                Cancel
-              </Button>
               {!generating && (
-                <Button disabled={llmBlocked} onClick={() => generate(true)}>
-                  <Sparkles />
-                  {overview ? "Regenerate" : "Generate"}
-                </Button>
+                <>
+                  <Button variant="outline" onClick={onClose}>
+                    Cancel
+                  </Button>
+                  <Button disabled={llmBlocked} onClick={() => generate(true)}>
+                    <Sparkles />
+                    {overview ? "Regenerate" : "Generate"}
+                  </Button>
+                </>
               )}
             </div>
           </>
@@ -209,12 +182,7 @@ export default function OverviewDialog({
               <div className="flex items-center gap-2">
                 <LlmHint />
                 {generating ? (
-                  <>
-                    {progress}
-                    <Button variant="outline" onClick={cancelGeneration}>
-                      Cancel
-                    </Button>
-                  </>
+                  progress
                 ) : (
                   <Button disabled={files.length === 0 || overBudget || llmBlocked} onClick={() => generate(false)}>
                     <Sparkles />

@@ -3,7 +3,7 @@ import { PanelRightClose, PanelRightOpen, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import GenerationProgress from "@/components/GenerationProgress";
 import LlmHint from "@/components/LlmHint";
-import { onChatDelta, onProjectAnalysisProgress, startProjectAnalysis } from "@/api";
+import { onProjectAnalysisProgress, startProjectAnalysis } from "@/api";
 import { useGeneration } from "@/lib/useGeneration";
 import { useLlmBlocked } from "@/lib/llmConfigured";
 import type { AnalysisInfo, Module, ProjectAnalysisProgress, ProjectReport } from "@/types";
@@ -27,7 +27,8 @@ export default function ProjectAnalysisPanel({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [analysisId, setAnalysisId] = useState("");
   const [progress, setProgress] = useState<ProjectAnalysisProgress | null>(null);
-  const [streamed, setStreamed] = useState("");
+  // The last finished run; its time is shown only when the new run has the same number of modules.
+  const [last, setLast] = useState<{ seconds: number; modules: number } | null>(null);
   const generation = useGeneration();
   const llmBlocked = useLlmBlocked();
 
@@ -44,22 +45,18 @@ export default function ProjectAnalysisPanel({
   async function run() {
     if (!analysis) return;
     const report = await generation.run(async () => {
-      const unlisten = await Promise.all([
-        onProjectAnalysisProgress((p) => {
-          setProgress(p);
-          setStreamed("");
-        }),
-        onChatDelta((text) => setStreamed((s) => s + text)),
-      ]);
+      const unlisten = await onProjectAnalysisProgress(setProgress);
       try {
         return await startProjectAnalysis(repoRoot, projectId, analysis.id, chosen.map((m) => m.id));
       } finally {
-        unlisten.forEach((u) => u());
+        unlisten();
       }
     });
     setProgress(null);
-    setStreamed("");
-    if (report) onReport(report, chosen.length);
+    if (report) {
+      if (!report.cancelled) setLast({ seconds: report.durationSecs, modules: chosen.length });
+      onReport(report, chosen.length);
+    }
   }
 
   if (!open) {
@@ -139,9 +136,13 @@ export default function ProjectAnalysisPanel({
                 Module {progress.index} of {progress.total}: {progress.moduleName}
               </p>
             )}
-            <GenerationProgress stage={generation.stage} seconds={generation.seconds} />
-            {streamed !== "" && (
-              <p className="max-h-40 overflow-y-auto text-xs whitespace-pre-wrap text-muted-foreground">{streamed}</p>
+            <GenerationProgress
+              generation={generation}
+              lastDuration={last?.modules === chosen.length ? last.seconds : undefined}
+              kind="findings"
+            />
+            {generation.streamed !== "" && (
+              <p className="max-h-40 overflow-y-auto text-xs whitespace-pre-wrap text-muted-foreground">{generation.streamed}</p>
             )}
           </>
         ) : (
