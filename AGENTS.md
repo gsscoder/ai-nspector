@@ -70,6 +70,7 @@ The development documents are in the `memory-bank` dir — they primarily focus 
 - NEVER update this file
 - NEVER modify `*.md` files in `memory-bank` (at any depth in the dir tree) without an explicit request
 - NEVER commit changes to Git history without explicit authorization; do not suggest committing changes
+- NEVER mention commit state (whether changes are committed, uncommitted, or pushed) unless I ask
  
 ## Guardrails
 Where a request conflicts with a guardrail, follow the guardrail and say why.
