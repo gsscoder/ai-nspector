@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { ArrowLeft, ScanSearch, Settings2 } from "lucide-react";
+import { ArrowLeft, GitBranch, ScanSearch, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Notice from "@/components/Notice";
 import RepoView from "@/components/RepoView";
@@ -67,6 +67,15 @@ function App() {
           ai-nspector
           {version !== null && <span className="font-normal text-muted-foreground tabular-nums">v{version}</span>}
         </h1>
+        {repo?.branch && (
+          <span
+            data-tauri-drag-region
+            className="mr-2 flex select-none items-center gap-1 text-xs text-muted-foreground"
+          >
+            <GitBranch className="size-3.5" />
+            <span data-tauri-drag-region className="max-w-48 truncate">{repo.branch}</span>
+          </span>
+        )}
         <Button
           variant="ghost"
           size="sm"

@@ -38,6 +38,7 @@ export interface Repo {
   name: string;
   projects: Project[];
   docs: DocFile[];
+  branch: string | null;
 }
 
 // Mirror the structs in src-tauri/src/store.rs.

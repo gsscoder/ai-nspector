@@ -25,7 +25,7 @@ pub fn run() -> tauri::Result<()> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            scan::open_repo,
+            store::open_repo,
             scan::list_recent_repos,
             files::read_file,
             modules::load_modules,

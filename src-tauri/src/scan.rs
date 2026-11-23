@@ -178,6 +178,8 @@ pub struct DocFile {
 pub struct Repo {
     pub root: String,
     pub name: String,
+    /// Filled by `store::open_repo`; `scan_repo` leaves it `None`.
+    pub branch: Option<String>,
     pub projects: Vec<Project>,
     /// Suggested first, then by folder depth, then by path.
     pub docs: Vec<DocFile>,
@@ -263,6 +265,7 @@ pub fn scan_repo(root: &Path) -> Result<Repo, AppError> {
     rank_docs(&mut walked.docs, &projects);
     Ok(Repo {
         root: root.to_string_lossy().into_owned(),
+        branch: None,
         projects,
         docs: walked.docs,
         name,
@@ -885,7 +888,7 @@ fn read_recent_repos(file: &Path) -> Result<Vec<String>, AppError> {
 }
 
 /// Puts `repo` first, removes its older entry, and keeps at most `MAX_RECENT_REPOS` entries.
-fn add_recent_repo(file: &Path, repo: &str) -> Result<(), AppError> {
+pub(crate) fn add_recent_repo(file: &Path, repo: &str) -> Result<(), AppError> {
     let mut recent = read_recent_repos(file)?;
     recent.retain(|existing| existing != repo);
     recent.insert(0, repo.to_string());
@@ -903,24 +906,12 @@ fn add_recent_repo(file: &Path, repo: &str) -> Result<(), AppError> {
         .map_err(|e| AppError::Io(format!("cannot write {}", file.display()), e))
 }
 
-fn recent_repos_file(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
+pub(crate) fn recent_repos_file(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
     let folder = app
         .path()
         .app_data_dir()
         .map_err(|e| AppError::Platform("cannot find the app data folder".into(), e.into()))?;
     Ok(folder.join(RECENT_REPOS_FILE))
-}
-
-#[tauri::command]
-pub async fn open_repo(app: tauri::AppHandle, path: String) -> Result<Repo, AppError> {
-    let recent_file = recent_repos_file(&app);
-    tauri::async_runtime::spawn_blocking(move || {
-        let repo = scan_repo(Path::new(&path))?;
-        let _ = recent_file.and_then(|file| add_recent_repo(&file, &path));
-        Ok(repo)
-    })
-    .await
-    .map_err(|e| AppError::Platform("scanning did not finish".into(), e.into()))?
 }
 
 #[tauri::command]

@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
-use crate::scan::Project;
+use crate::scan::{Project, Repo, add_recent_repo, recent_repos_file, scan_repo};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModuleFile {
@@ -135,6 +135,26 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Checked-out branch of the git repo that contains `dir`; `None` on a detached HEAD or when git fails.
+fn current_branch(dir: &Path) -> Option<String> {
+    let output = git(dir, &["branch", "--show-current"])?;
+    let branch = output.trim();
+    (!branch.is_empty()).then(|| branch.to_string())
+}
+
+#[tauri::command]
+pub async fn open_repo(app: tauri::AppHandle, path: String) -> Result<Repo, AppError> {
+    let recent_file = recent_repos_file(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut repo = scan_repo(Path::new(&path))?;
+        repo.branch = current_branch(Path::new(&path));
+        let _ = recent_file.and_then(|file| add_recent_repo(&file, &path));
+        Ok(repo)
+    })
+    .await
+    .map_err(|e| AppError::Platform("scanning did not finish".into(), e.into()))?
 }
 
 /// Hash of path, size and modified time of each file (relative to `base`).
@@ -358,6 +378,19 @@ mod tests {
         let before = cache_key(d, &p);
         fs::write(d.join("módulo.ts"), "12345").unwrap();
         assert_ne!(before, cache_key(d, &p));
+    }
+
+    #[test]
+    fn current_branch_is_the_checked_out_branch_and_none_on_a_detached_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        if !committed_repo(d) {
+            return;
+        }
+        assert!(git_ok(d, &["checkout", "-q", "-b", "feature"]));
+        assert_eq!(current_branch(d), Some("feature".to_string()));
+        assert!(git_ok(d, &["checkout", "-q", "--detach"]));
+        assert_eq!(current_branch(d), None);
     }
 
     #[test]
