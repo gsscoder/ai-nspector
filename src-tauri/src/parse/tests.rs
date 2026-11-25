@@ -677,3 +677,296 @@ fn python_imports_resolve_to_stubs_when_no_source_file_exists() {
         ))
     );
 }
+
+/// Writes the `go.mod` files, which are not project files, then analyzes the sources as one project.
+fn analyze_go(root: &Path, go_mods: &[(&str, &str)], sources: &[(&str, &str)]) -> ProjectStructure {
+    for (path, content) in go_mods {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    analyze_sources(root, sources)
+}
+
+fn imports_of<'a>(structure: &'a ProjectStructure, path: &str) -> Option<Vec<&'a str>> {
+    edges(structure)
+        .into_iter()
+        .find(|(file, _)| *file == path)
+        .map(|(_, imports)| imports)
+}
+
+#[test]
+fn go_symbols_are_top_level_functions_methods_and_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_sources(
+        dir.path(),
+        &[(
+            "main.go",
+            "package main\n\
+             func Run() {}\n\
+             func (s *Server) Start() {}\n\
+             type Server struct { addr string }\n\
+             type Store interface { Get() }\n\
+             type ID int\n\
+             type Alias = ID\n\
+             type (\n\
+             \tPair struct{}\n\
+             \tNamer interface{}\n\
+             \tCode string\n\
+             )\n\
+             type Box[T any] struct { v T }\n\
+             const Limit = 1\n\
+             var Global = 2\n\
+             func inner() { type local struct{} }\n",
+        )],
+    );
+
+    assert_eq!(
+        symbols(&structure, "main.go"),
+        vec![
+            ("Run", Function),
+            ("Start", Function),
+            ("Server", Struct),
+            ("Store", Interface),
+            ("ID", Type),
+            ("Alias", Type),
+            ("Pair", Struct),
+            ("Namer", Interface),
+            ("Code", Type),
+            ("Box", Struct),
+            ("inner", Function),
+        ]
+    );
+}
+
+#[test]
+fn go_single_and_grouped_imports_link_with_aliases_blank_and_dot_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_go(
+        dir.path(),
+        &[("go.mod", "module example.com/app\n\ngo 1.22\n")],
+        &[
+            (
+                "main.go",
+                "package main\n\
+                 import \"example.com/app/a\"\n\
+                 import (\n\
+                 \t\"fmt\"\n\
+                 \tb \"example.com/app/b\"\n\
+                 \t_ \"example.com/app/c\"\n\
+                 \t. \"example.com/app/d\"\n\
+                 \t`example.com/app/e`\n\
+                 )\n",
+            ),
+            ("a/a.go", "package a\n"),
+            ("b/b.go", "package b\n"),
+            ("c/c.go", "package c\n"),
+            ("d/d.go", "package d\n"),
+            ("e/e.go", "package e\n"),
+        ],
+    );
+
+    assert_eq!(
+        imports_of(&structure, "main.go"),
+        Some(vec!["a/a.go", "b/b.go", "c/c.go", "d/d.go", "e/e.go"])
+    );
+}
+
+#[test]
+fn go_import_links_every_non_test_file_of_the_folder_and_nothing_below_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_go(
+        dir.path(),
+        &[("go.mod", "module example.com/app\n")],
+        &[
+            (
+                "main.go",
+                "package main\nimport \"example.com/app/store\"\n",
+            ),
+            ("store/a.go", "package store\n"),
+            ("store/b.go", "package store\n"),
+            ("store/b_test.go", "package store\n"),
+            ("store/sub/c.go", "package sub\n"),
+            ("store.go", "package main\n"),
+        ],
+    );
+
+    assert_eq!(
+        imports_of(&structure, "main.go"),
+        Some(vec!["store/a.go", "store/b.go"])
+    );
+}
+
+#[test]
+fn go_module_root_import_links_the_root_package_and_test_files_import_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_go(
+        dir.path(),
+        &[("svc/go.mod", "module example.com/svc\n")],
+        &[
+            ("svc/api.go", "package svc\n"),
+            (
+                "svc/cmd/main.go",
+                "package main\nimport \"example.com/svc\"\n",
+            ),
+            (
+                "svc/api_test.go",
+                "package svc\nimport \"example.com/svc/cmd\"\n",
+            ),
+        ],
+    );
+
+    assert_eq!(
+        edges(&structure),
+        vec![
+            ("svc/api.go", vec![]),
+            ("svc/api_test.go", vec!["svc/cmd/main.go"]),
+            ("svc/cmd/main.go", vec!["svc/api.go"]),
+        ]
+    );
+}
+
+#[test]
+fn go_external_and_standard_imports_and_a_missing_go_mod_give_no_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_go(
+        dir.path(),
+        &[("app/go.mod", "module example.com/app\n")],
+        &[
+            (
+                "app/main.go",
+                "package main\n\
+                 import (\n\
+                 \t\"fmt\"\n\
+                 \t\"github.com/other/lib\"\n\
+                 \t\"example.com/application\"\n\
+                 \t\"C\"\n\
+                 )\n",
+            ),
+            ("app/fmt/f.go", "package fmt\n"),
+            ("app/application/x.go", "package application\n"),
+            ("app/lib/l.go", "package lib\n"),
+            (
+                "loose/main.go",
+                "package main\nimport \"example.com/app/lib\"\n",
+            ),
+        ],
+    );
+
+    assert!(
+        edges(&structure)
+            .iter()
+            .all(|(_, imports)| imports.is_empty())
+    );
+}
+
+#[test]
+fn go_major_version_suffix_and_nested_modules_use_the_nearest_go_mod() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_go(
+        dir.path(),
+        &[
+            ("go.mod", "module example.com/m // outer\n"),
+            ("tools/go.mod", "module \"example.com/m/v2\"\n\ngo 1.22\n"),
+        ],
+        &[
+            ("main.go", "package main\nimport \"example.com/m/util\"\n"),
+            ("util/u.go", "package util\n"),
+            (
+                "tools/main.go",
+                "package main\nimport (\n\t\"example.com/m/v2/gen\"\n\t\"example.com/m/util\"\n)\n",
+            ),
+            ("tools/gen/g.go", "package gen\n"),
+            ("tools/util/u.go", "package util\n"),
+        ],
+    );
+
+    assert_eq!(imports_of(&structure, "main.go"), Some(vec!["util/u.go"]));
+    assert_eq!(
+        imports_of(&structure, "tools/main.go"),
+        Some(vec!["tools/gen/g.go"])
+    );
+}
+
+#[test]
+fn go_module_line_forms_all_resolve_the_module_imports() {
+    for go_mod in [
+        "module example.com/app\n",
+        "module \"example.com/app\"\n",
+        "module `example.com/app`\n",
+        "module example.com/app // note\n",
+        "// the app\nmodule (\n\t// path\n\n\t\"example.com/app\" // note\n)\n",
+        "module (\n\texample.com/app\n)\n\ngo 1.22\n",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let structure = analyze_go(
+            dir.path(),
+            &[("go.mod", go_mod)],
+            &[
+                ("main.go", "package main\nimport \"example.com/app/a\"\n"),
+                ("a/a.go", "package a\n"),
+            ],
+        );
+
+        assert_eq!(
+            edges(&structure),
+            vec![("a/a.go", vec![]), ("main.go", vec!["a/a.go"])],
+            "{go_mod}"
+        );
+    }
+}
+
+#[test]
+fn go_module_line_without_a_path_gives_no_links() {
+    for go_mod in [
+        "go 1.22\n",
+        "module\n",
+        "module // note\n",
+        "module \"\"\n",
+        "module (\n)\n",
+        "module (\n\t// nothing\n)\n",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let structure = analyze_go(
+            dir.path(),
+            &[("go.mod", go_mod)],
+            &[
+                (
+                    "cmd/main.go",
+                    "package main\nimport (\n\t\"example.com/app/a\"\n\t\"//\"\n\t\"(/a\"\n)\n",
+                ),
+                ("a/a.go", "package a\n"),
+                ("root.go", "package app\n"),
+            ],
+        );
+
+        assert_eq!(
+            edges(&structure),
+            vec![
+                ("a/a.go", vec![]),
+                ("cmd/main.go", vec![]),
+                ("root.go", vec![])
+            ],
+            "{go_mod}"
+        );
+    }
+}
+
+#[test]
+fn go_broken_syntax_still_yields_what_was_recognised() {
+    let dir = tempfile::tempdir().unwrap();
+    let structure = analyze_go(
+        dir.path(),
+        &[("go.mod", "module example.com/app\n")],
+        &[
+            (
+                "main.go",
+                "package main\nimport \"example.com/app/a\"\nfunc Ok() {}\nfunc Broken( {\ntype T struct {\n",
+            ),
+            ("a/a.go", "package a\n"),
+        ],
+    );
+
+    assert_eq!(imports_of(&structure, "main.go"), Some(vec!["a/a.go"]));
+    assert!(symbols(&structure, "main.go").contains(&("Ok", Function)));
+}

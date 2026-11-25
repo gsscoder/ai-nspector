@@ -5,6 +5,7 @@ export const STACK: Record<Language, string> = {
   dotnet: ".NET",
   typescript: "JavaScript / TypeScript",
   rust: "Rust",
+  go: "Go",
   other: "Other",
 };
 

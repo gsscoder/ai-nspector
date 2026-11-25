@@ -17,6 +17,7 @@ const LANGS: Record<string, string> = {
   vue: "vue",
   svelte: "svelte",
   rs: "rust",
+  go: "go",
 };
 
 type State = { html: string } | { error: string } | null;

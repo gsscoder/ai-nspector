@@ -12,17 +12,20 @@
 - Platforms: Windows and Linux; no macOS for now
 ## Target repos (MVP)
 - Python, .NET (C#), TypeScript/JavaScript; all 3 in the MVP
+- Go: added after the MVP
 - Parser: tree-sitter Rust crates, one grammar per language
 - Project detection: manifest files, no AI (list in `intent.md`)
   - .NET: each `.csproj` is a project; `.sln` files are ignored
   - Nesting: a file belongs to the nearest manifest above it of its own language; without one, to the nearest manifest of any language (for example the JS files of a Python web app)
   - Workspace root (e.g. `package.json` with `workspaces`) with no own source files is not a project
+  - Go: each `go.mod` is a project; `go.work` is not a manifest
   - Source files under no manifest: one extra project named "(other files)"
 - Import graph per language:
   - Python: `import` / `from ... import` → resolve module path to files
   - TS/JS: relative `import` / `require` → files; bare package names are external, skip them
   - C#: `using` gives namespaces → map to files through the `namespace` declarations in each file
-- File walk: respect `.gitignore` (`ignore` crate) and skip `bin/`, `obj/`, `node_modules/`, `.venv/`, `dist/` (default)
+  - Go: `import` path that starts with the module path of the nearest `go.mod` → non-test `.go` files of that folder; external imports are skipped
+- File walk: respect `.gitignore` (`ignore` crate) and skip `bin/`, `obj/`, `node_modules/`, `.venv/`, `dist/` (default); `vendor/` only next to a `go.mod`
 ## LLM
 - One client: OpenAI-compatible Chat Completions API
 - Settings: base URL, model name, API key

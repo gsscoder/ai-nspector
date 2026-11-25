@@ -4,6 +4,7 @@
 //! file list of the project and never runs a language tool chain.
 
 mod csharp;
+pub(crate) mod go;
 mod paths;
 mod python;
 mod rust;
@@ -98,6 +99,8 @@ pub fn analyze_project(repo_root: &Path, files: &[String]) -> Result<ProjectStru
             _ => None,
         }));
 
+    let go_modules = go::Modules::new(repo_root, &project_files);
+
     let files = parsed
         .into_iter()
         .map(|file| {
@@ -109,6 +112,7 @@ pub fn analyze_project(repo_root: &Path, files: &[String]) -> Result<ProjectStru
                 }
                 Links::CSharp(unit) => namespaces.resolve(unit),
                 Links::Rust(unit) => rust::resolve(&project_files, &file.path, unit),
+                Links::Go(unit) => go::resolve(&go_modules, &file.path, unit),
             };
             let imports: BTreeSet<String> = targets
                 .into_iter()
@@ -153,6 +157,7 @@ pub(crate) enum Dialect {
     JavaScript,
     CSharp,
     Rust,
+    Go,
 }
 
 impl Dialect {
@@ -165,6 +170,7 @@ impl Dialect {
             "js" | "jsx" | "mjs" | "cjs" => Some(Self::JavaScript),
             "cs" => Some(Self::CSharp),
             "rs" => Some(Self::Rust),
+            "go" => Some(Self::Go),
             _ => None,
         }
     }
@@ -177,6 +183,7 @@ impl Dialect {
             Self::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
             Self::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
             Self::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Self::Go => tree_sitter_go::LANGUAGE.into(),
         }
     }
 }
@@ -188,6 +195,7 @@ enum Links {
     Script(Vec<String>),
     CSharp(csharp::Unit),
     Rust(rust::Unit),
+    Go(go::Unit),
 }
 
 struct ParsedFile {
@@ -236,6 +244,10 @@ fn parse_file(repo_root: &Path, path: &str) -> Result<ParsedFile, String> {
         Dialect::Rust => {
             let (unit, symbols) = rust::extract(root, source);
             (Links::Rust(unit), symbols)
+        }
+        Dialect::Go => {
+            let (unit, symbols) = go::extract(root, source);
+            (Links::Go(unit), symbols)
         }
     };
     Ok(ParsedFile {

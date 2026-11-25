@@ -9,10 +9,10 @@ use tauri::Manager;
 use toml::{Table, Value as TomlValue};
 
 use crate::error::AppError;
-use crate::parse::Dialect;
+use crate::parse::{Dialect, go};
 
-/// Skipped by name. `bin`, `obj` and `target` are build output only next to a manifest of their
-/// tool chain; see `is_build_output_dir`.
+/// Skipped by name. `bin`, `obj`, `target` and `vendor` are build output only next to a manifest
+/// of their tool chain; see `is_build_output_dir`.
 const SKIPPED_DIRS: [&str; 5] = [
     "node_modules",
     ".venv",
@@ -50,8 +50,8 @@ const SUGGESTED_NAMES: [&str; 7] = [
 ];
 const MAX_MANIFEST_BYTES: u64 = 1_000_000;
 /// Language, dependency name, display name, kind. The kind is `Frontend`, `Backend`, `Desktop`,
-/// `Fullstack` or `Cli`. Python names are normalised (lowercase, `-`); for .NET the "dependency" is
-/// a text marker of the project file.
+/// `Fullstack` or `Cli`. Python names are normalised (lowercase, `-`); Go names are module paths
+/// without the major-version suffix; for .NET the "dependency" is a text marker of the project file.
 type Framework = (Language, &'static str, &'static str, Role);
 // One line per entry reads as a table; rustfmt would split the long ones over six lines.
 #[rustfmt::skip]
@@ -90,6 +90,15 @@ const FRAMEWORKS: &[Framework] = &[
     (Language::Rust, "tonic", "Tonic", Role::Backend),
     (Language::Rust, "tauri", "Tauri", Role::Desktop),
     (Language::Rust, "clap", "Clap", Role::Cli),
+    (Language::Go, "github.com/gin-gonic/gin", "Gin", Role::Backend),
+    (Language::Go, "github.com/labstack/echo", "Echo", Role::Backend),
+    (Language::Go, "github.com/gofiber/fiber", "Fiber", Role::Backend),
+    (Language::Go, "github.com/go-chi/chi", "Chi", Role::Backend),
+    (Language::Go, "google.golang.org/grpc", "gRPC", Role::Backend),
+    (Language::Go, "github.com/spf13/cobra", "Cobra", Role::Cli),
+    (Language::Go, "github.com/urfave/cli", "urfave/cli", Role::Cli),
+    (Language::Go, "github.com/wailsapp/wails", "Wails", Role::Desktop),
+    (Language::Go, "fyne.io/fyne", "Fyne", Role::Desktop),
     (Language::Dotnet, "Microsoft.NET.Sdk.BlazorWebAssembly\"", "Blazor WebAssembly", Role::Frontend),
     (Language::Dotnet, "Microsoft.NET.Sdk.Web\"", "ASP.NET Core", Role::Backend),
     (Language::Dotnet, "Microsoft.NET.Sdk.Worker\"", "Worker Service", Role::Backend),
@@ -124,6 +133,7 @@ pub enum Language {
     Dotnet,
     Typescript,
     Rust,
+    Go,
     Other,
 }
 
@@ -278,13 +288,16 @@ fn is_skipped_dir(entry: &DirEntry) -> bool {
 }
 
 // ponytail: only a `.csproj` (not `.fsproj` or `.vbproj`) marks `bin` and `obj` as .NET output; a
-// build output folder next to no manifest is scanned unless `.gitignore` lists it.
+// build output folder next to no manifest is scanned unless `.gitignore` lists it. `vendor` is Go
+// output only next to a `go.mod`.
 fn is_build_output_dir(entry: &DirEntry) -> bool {
     let name = entry.file_name();
     let manifest_matches: fn(&str) -> bool = if name == "bin" || name == "obj" {
         |file_name| file_name.ends_with(".csproj")
     } else if name == "target" {
         |file_name| file_name == "Cargo.toml"
+    } else if name == "vendor" {
+        |file_name| file_name == "go.mod"
     } else {
         return false;
     };
@@ -443,6 +456,7 @@ fn rank_docs(docs: &mut [DocFile], projects: &[Project]) {
 }
 
 // ponytail: a `tsconfig.json` alone is not a manifest: it configures a project, it does not declare one.
+// A `go.work` is not a manifest either: it lists modules, and each `go.mod` is a project.
 // A `requirements` file is any `requirements-*.txt` or `*.txt` in a folder named `requirements`;
 // `constraints.txt` and other names are not read. `requirements.txt` outranks them: they are
 // variants of it. A `pyproject.toml` without a dependency list (dynamic dependencies) still beats a
@@ -457,6 +471,7 @@ fn manifest_kind(file_name: &str, dir: &str) -> Option<(Language, u8)> {
         "package.json" => Some((Language::Typescript, 0)),
         "deno.json" | "deno.jsonc" => Some((Language::Typescript, 1)),
         "Cargo.toml" => Some((Language::Rust, 0)),
+        "go.mod" => Some((Language::Go, 0)),
         _ if file_name.ends_with(".csproj") => Some((Language::Dotnet, 0)),
         _ if is_requirements_file(file_name, dir) => Some((Language::Python, 4)),
         _ => None,
@@ -490,8 +505,8 @@ fn read_manifest(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-// ponytail: only `package.json`, `Cargo.toml` and `pyproject.toml` declare a name; `setup.py`
-// is not run or parsed, so it falls back to the folder name.
+// ponytail: only `package.json`, `Cargo.toml`, `pyproject.toml` and `go.mod` declare a name;
+// `setup.py` is not run or parsed, so it falls back to the folder name.
 fn declared_name(file_name: &str, text: &str) -> Option<String> {
     let name = match file_name {
         "package.json" => serde_json::from_str::<serde_json::Value>(text)
@@ -517,6 +532,7 @@ fn declared_name(file_name: &str, text: &str) -> Option<String> {
                 .find(|name| !name.trim().is_empty())?
                 .to_string()
         }
+        "go.mod" => go_module_name(text)?.to_string(),
         _ => return None,
     };
     Some(name).filter(|name| !name.trim().is_empty())
@@ -553,6 +569,7 @@ impl<'a> Declared<'a> {
             ),
             Language::Python => Self::Names(python_token_names(text)),
             Language::Rust => Self::Names(cargo_dependency_names(text)),
+            Language::Go => Self::Names(go_dependency_names(text)),
             Language::Dotnet | Language::Other => Self::Text(text),
         }
     }
@@ -658,6 +675,62 @@ fn cargo_dependency_names(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The last path segment of the `module` line of a `go.mod`, without a major-version suffix.
+// ponytail: a `go.mod` without a usable `module` line has no name; it falls back to the folder name.
+fn go_module_name(text: &str) -> Option<&str> {
+    strip_go_major_version(go::module_path(text)?)
+        .rsplit('/')
+        .next()
+}
+
+/// Module paths of the `require` lines and `require (...)` blocks of a `go.mod`, without the
+/// major-version suffix, so `github.com/labstack/echo/v4` is `github.com/labstack/echo`.
+// ponytail: `// indirect` requirements are skipped; `replace` and `exclude` are not read; an
+// unreadable file has no names.
+fn go_dependency_names(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_require_block = false;
+    for line in text.lines().map(str::trim) {
+        let requirement = if in_require_block {
+            if line.starts_with(')') {
+                in_require_block = false;
+                continue;
+            }
+            line
+        } else if let Some(rest) = line
+            .strip_prefix("require")
+            .filter(|rest| rest.starts_with(|c: char| c.is_whitespace() || c == '('))
+        {
+            let rest = rest.trim_start();
+            if rest.starts_with('(') {
+                in_require_block = true;
+                continue;
+            }
+            rest
+        } else {
+            continue;
+        };
+        let (code, comment) = requirement.split_once("//").unwrap_or((requirement, ""));
+        if comment.trim_start().starts_with("indirect") {
+            continue;
+        }
+        if let Some(path) = code.split_whitespace().next() {
+            names.push(strip_go_major_version(go::unquote(path)).to_string());
+        }
+    }
+    names
+}
+
+/// `example.com/foo/v2` is `example.com/foo`.
+fn strip_go_major_version(path: &str) -> &str {
+    match path.rsplit_once("/v") {
+        Some((base, major)) if !major.is_empty() && major.bytes().all(|b| b.is_ascii_digit()) => {
+            base
+        }
+        _ => path,
+    }
+}
+
 /// Names from `[project] dependencies`, `[project.optional-dependencies]` and
 /// `[tool.poetry.dependencies]`, normalised like `requirement_name`.
 // ponytail: dependency groups (PEP 735, Poetry `group.*`) and Poetry extras are not read; an
@@ -745,13 +818,13 @@ fn is_fixture_project(dir: &str) -> bool {
 }
 
 // ponytail: only a .NET project file with an explicit `<OutputType>Library` is a library; for
-// Cargo, Python and npm the signal is in the file list (`src/lib.rs` without `src/main.rs`), not
-// in the manifest, so they never get `Library`.
+// Cargo, Go, Python and npm the signal is in the file list (`src/lib.rs` without `src/main.rs`, no
+// `package main`), not in the manifest, so they never get `Library`.
 fn is_library_project(file_name: &str, text: &str) -> bool {
     file_name.ends_with(".csproj") && text.contains("<OutputType>Library")
 }
 
-// ponytail: only .NET has a test marker in the manifest; Python and JS/TS test projects are
+// ponytail: only .NET has a test marker in the manifest; Go, Python and JS/TS test projects are
 // found by folder name, a test-only package elsewhere keeps its dependency role.
 fn is_test_project(file_name: &str, dir: &str, text: &str) -> bool {
     let folder = dir.rsplit('/').next().unwrap_or(dir).to_lowercase();
@@ -776,6 +849,7 @@ fn source_language(file_name: &str) -> Option<Language> {
             Some(Language::Typescript)
         }
         Some(Dialect::Rust) => Some(Language::Rust),
+        Some(Dialect::Go) => Some(Language::Go),
         None => match file_name.rsplit_once('.')?.1.to_ascii_lowercase().as_str() {
             "vue" | "svelte" => Some(Language::Typescript),
             "razor" => Some(Language::Dotnet),
@@ -960,6 +1034,8 @@ mod tests {
             "a.ts"
         } else if file_name == "Cargo.toml" {
             "lib.rs"
+        } else if file_name == "go.mod" {
+            "a.go"
         } else {
             "a.py"
         };
@@ -1062,6 +1138,81 @@ mod tests {
         ] {
             assert_eq!(role_of("Cargo.toml", manifest), role, "{manifest}");
         }
+    }
+
+    #[test]
+    fn go_role_reads_runtime_requirements_and_ignores_indirect_ones() {
+        for (manifest, role) in [
+            (
+                "module m\n\nrequire github.com/gin-gonic/gin v1.10.0\n",
+                Role::Backend,
+            ),
+            (
+                "module m\n\nrequire (\n\t// web\n\tgithub.com/labstack/echo/v4 v4.12.0\n)\n",
+                Role::Backend,
+            ),
+            (
+                "module m\n\nrequire github.com/spf13/cobra v1.8.0 // cli\n",
+                Role::Cli,
+            ),
+            (
+                "module m\n\nrequire (\n\tgithub.com/spf13/cobra v1.8.0\n\tfyne.io/fyne/v2 v2.5.0\n)\n",
+                Role::Desktop,
+            ),
+            (
+                "module m\n\nrequire (\n\tgithub.com/gin-gonic/gin v1.10.0 // indirect\n)\n",
+                Role::Unknown,
+            ),
+            (
+                "module github.com/gin-gonic/gin\n\nreplace github.com/labstack/echo => ../echo\n",
+                Role::Unknown,
+            ),
+            ("// require github.com/gin-gonic/gin v1\n", Role::Unknown),
+            ("", Role::Unknown),
+        ] {
+            assert_eq!(role_of("go.mod", manifest), role, "{manifest}");
+        }
+    }
+
+    #[test]
+    fn go_frameworks_match_module_paths_with_and_without_a_major_version() {
+        for (path, name) in [
+            ("github.com/gin-gonic/gin", "Gin"),
+            ("github.com/labstack/echo/v4", "Echo"),
+            ("github.com/gofiber/fiber/v2", "Fiber"),
+            ("github.com/go-chi/chi/v5", "Chi"),
+            ("google.golang.org/grpc", "gRPC"),
+            ("github.com/spf13/cobra", "Cobra"),
+            ("github.com/urfave/cli/v2", "urfave/cli"),
+            ("github.com/wailsapp/wails/v2", "Wails"),
+            ("fyne.io/fyne/v2", "Fyne"),
+        ] {
+            let manifest = format!("module m\n\nrequire {path} v1.0.0\n");
+            assert_eq!(frameworks_of("go.mod", &manifest), vec![name], "{path}");
+        }
+    }
+
+    #[test]
+    fn go_dependency_names_keep_the_path_and_drop_the_major_version() {
+        let text = "module example.com/app\n\ngo 1.22\n\n\
+            require github.com/gin-gonic/gin v1.10.0\n\
+            require \"github.com/labstack/echo/v4\" v4.12.0 // web\n\n\
+            require (\n\
+            \tgoogle.golang.org/grpc v1.65.0\n\
+            \t// a comment\n\
+            \tgolang.org/x/sys v0.20.0 // indirect\n\
+            )\n\n\
+            replace github.com/spf13/cobra => ../cobra\n\
+            exclude github.com/urfave/cli v1.0.0\n";
+
+        assert_eq!(
+            go_dependency_names(text),
+            vec![
+                "github.com/gin-gonic/gin",
+                "github.com/labstack/echo",
+                "google.golang.org/grpc"
+            ]
+        );
     }
 
     #[test]
@@ -1692,6 +1843,7 @@ mod tests {
             ("a.vue", Some(Language::Typescript)),
             ("a.svelte", Some(Language::Typescript)),
             ("a.rs", Some(Language::Rust)),
+            ("a.go", Some(Language::Go)),
             ("a.cshtml", None),
             ("a.txt", None),
             ("Makefile", None),
@@ -1903,6 +2055,103 @@ mod tests {
         assert_eq!(ids, vec!["crates/a/Cargo.toml"]);
     }
 
+    #[test]
+    fn go_mod_owns_the_go_files_below_it() {
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        write_files(
+            dir.path(),
+            &["main.go", "internal/store/store.go", "cmd/tool/tool.go"],
+        );
+        fs::write(
+            dir.path().join("go.mod"),
+            "module example.com/tool/v2\n\nrequire github.com/spf13/cobra v1.8.0\n",
+        )
+        .unwrap();
+
+        let projects = scan_repo(dir.path()).unwrap().projects;
+
+        assert_eq!(projects.len(), 1);
+        let found = &projects[0];
+        assert_eq!(found.id, "go.mod");
+        assert_eq!(found.name, "tool");
+        assert_eq!(found.language, Language::Go);
+        assert_eq!(found.languages, vec![Language::Go]);
+        assert_eq!(found.role, Role::Cli);
+        assert_eq!(found.frameworks, vec!["Cobra"]);
+        assert_eq!(
+            found.files,
+            vec!["cmd/tool/tool.go", "internal/store/store.go", "main.go"]
+        );
+    }
+
+    #[test]
+    fn walk_skips_vendor_only_next_to_a_go_mod() {
+        assert_eq!(
+            scanned_files(&[
+                "go.mod",
+                "main.go",
+                "vendor/github.com/x/y/y.go",
+                "svc/go.mod",
+                "svc/svc.go",
+                "svc/vendor/z.go",
+                "tools/vendor/w.go",
+            ]),
+            vec!["main.go", "svc/svc.go", "tools/vendor/w.go"]
+        );
+        assert_eq!(
+            scanned_files(&["pyproject.toml", "app.py", "vendor/a.py"]),
+            vec!["app.py", "vendor/a.py"]
+        );
+    }
+
+    #[test]
+    fn go_work_alone_is_not_a_project() {
+        let project_ids = |files: &[&str]| {
+            let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+            write_files(dir.path(), files);
+            scan_repo(dir.path())
+                .unwrap()
+                .projects
+                .into_iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(project_ids(&["go.work", "main.go"]), vec!["(other)"]);
+        assert_eq!(
+            project_ids(&["go.work", "a/go.mod", "a/a.go", "b/go.mod", "b/b.go"]),
+            vec!["a/go.mod", "b/go.mod"]
+        );
+    }
+
+    #[test]
+    fn go_module_in_testdata_is_a_fixture() {
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        write_files(dir.path(), &["testdata/app/go.mod", "testdata/app/main.go"]);
+
+        let projects = scan_repo(dir.path()).unwrap().projects;
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].role, Role::Fixture);
+    }
+
+    #[test]
+    fn go_project_lists_another_language_from_a_fifth_of_its_files() {
+        let dir = tempfile::Builder::new().prefix("scan-").tempdir().unwrap();
+        write_files(
+            dir.path(),
+            &["go.mod", "a.go", "b.go", "c.go", "web/a.ts", "web/b.ts"],
+        );
+
+        let projects = scan_repo(dir.path()).unwrap().projects;
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(
+            projects[0].languages,
+            vec![Language::Go, Language::Typescript]
+        );
+    }
+
     fn sources_of(counts: &[(Language, usize)]) -> Vec<SourceFile> {
         counts
             .iter()
@@ -2002,6 +2251,31 @@ mod tests {
     }
 
     #[test]
+    fn name_comes_from_the_last_segment_of_the_go_module_path() {
+        for (text, name) in [
+            ("module example.com/foo\n", "foo"),
+            ("module example.com/foo/v2\n\ngo 1.22\n", "foo"),
+            ("// the app\nmodule \"example.com/foo\" // main\n", "foo"),
+            ("module `example.com/foo/v10`\n", "foo"),
+            ("module foo\n", "foo"),
+            ("module example.com/vault\n", "vault"),
+            ("go 1.22\nmodule\texample.com/foo\n", "foo"),
+            ("module (\n\texample.com/foo/v2\n)\n", "foo"),
+            (
+                "module (\n\t// path\n\n\t\"example.com/foo\" // main\n)\n",
+                "foo",
+            ),
+            ("module example.com/foo // note\n", "foo"),
+        ] {
+            assert_eq!(
+                declared_name("go.mod", text).as_deref(),
+                Some(name),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
     fn name_comes_from_pyproject_project_then_poetry() {
         let project = "[project]\nname = \"pep621\"\n[tool.poetry]\nname = \"poetry\"\n";
         let poetry = "[tool.poetry]\nname = \"poetry\"\n";
@@ -2034,6 +2308,12 @@ mod tests {
             ("Cargo.toml", "not = = toml"),
             ("pyproject.toml", "[project]\nname = \"\"\n"),
             ("pyproject.toml", "[build-system]\nrequires = []\n"),
+            ("go.mod", "go 1.22\n"),
+            ("go.mod", "module\n"),
+            ("go.mod", "module \"\"\n"),
+            ("go.mod", "module // note\n"),
+            ("go.mod", "module (\n)\n"),
+            ("go.mod", "module (\n\t// nothing\n)\n"),
             ("setup.py", "setup(name='x')"),
             ("requirements.txt", "name"),
             ("App.csproj", "<Project />"),

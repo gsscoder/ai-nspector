@@ -1,6 +1,6 @@
 # AI-nspector
 
-![version](https://img.shields.io/badge/version-0.7.0-blue)
+![version](https://img.shields.io/badge/version-0.8.0-blue)
 
 An AI-powered code inspector for desktop. Use it on your own repository or to explore a new one. More and more code is AI-generated, and this app helps you see what is in it and what to improve.
 
@@ -21,13 +21,27 @@ Repo  →  Project  →  Module  →  File
 | Level | Source | Notes |
 |-------|--------|-------|
 | **Repo** | The folder you open | Can hold several independent projects. An optional overview (`brief.md`, `overview.md`) describes the repo to the LLM. |
-| **Project** | Manifest files (`package.json`, `.csproj`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, ...) | No AI. Fast, free, same result every run. Each project gets a role: backend, frontend, test or unknown. |
+| **Project** | Manifest files (`package.json`, `.csproj`, `pyproject.toml`, `Cargo.toml`, `go.mod`, ...) | No AI. Fast, free, same result every run. Each project gets a role: backend, frontend, desktop, fullstack, library, cli, fixture, test or unknown. |
 | **Module** | LLM | The LLM sees only structure: file list, imports and top-level symbols, plus the repo brief. It does not see source code bodies. Show modules as cards or as a graph of their imports. |
 | **File** | Source file | Read-only view with syntax highlighting. "Open in editor" opens VS Code. |
 
-- Import and symbol parsing supports **Python**, **C#** and **TypeScript / JavaScript**.
+- Import and symbol parsing supports **Python**, **C#**, **TypeScript / JavaScript**, **Rust** and **Go**.
 - Every file has exactly one primary module. A file can also be a secondary file of other modules. Files the LLM leaves out go to an "Unassigned" module.
 - Module results are cached in `<repo>/.ainspector/` (git-ignored automatically). The cache key is the git commit, plus a fingerprint of local changes. When the repo changes, the app shows an **Outdated** badge. It does not regenerate on its own.
+
+### Languages and stacks
+
+| Language | Manifests | Frameworks detected |
+|----------|-----------|---------------------|
+| **Python** | `pyproject.toml`, `setup.py`, `setup.cfg`, `Pipfile`, `requirements*.txt` | FastAPI, Flask, Django, Click, Typer |
+| **.NET (C#)** | `*.csproj` | ASP.NET Core, Blazor WebAssembly, Worker Service, WPF, Windows Forms, .NET MAUI |
+| **TypeScript / JavaScript** | `package.json`, `deno.json`, `deno.jsonc` | React, Vue, Svelte, Angular, Next.js, Nuxt, SvelteKit, Remix, Express, Fastify, NestJS, Hono, Koa, Tauri, Electron, Commander, Yargs |
+| **Rust** | `Cargo.toml` | Leptos, Yew, Dioxus, Sycamore, Axum, Actix Web, Rocket, Warp, Poem, Tonic, Tauri, Clap |
+| **Go** | `go.mod` | Gin, Echo, Fiber, Chi, gRPC, Cobra, urfave/cli, Wails, Fyne |
+
+- Source files are parsed for imports and symbols by extension: `.py`, `.pyi`, `.cs`, `.ts`, `.mts`, `.cts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.rs`, `.go`.
+- The app reads frameworks from the manifest. The frameworks give the project role (backend, frontend, desktop, fullstack, cli). A folder name such as `tests` or `examples`, or a .NET test or library marker in a `.csproj`, gives the role test, fixture or library.
+- Files under no known manifest form the `(other files)` project.
 
 ### Analyses
 
