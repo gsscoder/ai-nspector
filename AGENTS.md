@@ -1,7 +1,7 @@
 # Project Overview & AI Instructions
 
 ## Project Brief
-Desktop app that helps a user understand a code repository they did not write, often AI-generated.
+Desktop app that helps a user understand a code repository, their own or a new one, often AI-generated.
 Navigation: repo → project → module → file. AI analysis is the product: it splits each project into logical modules, later it will judge over-engineering and AI-slop.
 Concepts in `.agent-files/intent.md`, tech decisions in `.agent-files/spec.md`, implementation plan in `.agent-files/plan.md`.
 

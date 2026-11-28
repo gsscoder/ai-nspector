@@ -5,7 +5,7 @@
 ## Product
 - Name and folder: `ai-nspector`
 - Type: desktop app
-- Goal: help a user understand a code repository they did not write; more and more often, AI-generated code
+- Goal: help a user understand a code repository, their own or a new one; more and more often, AI-generated code
 - Mature goal: judge code quality; detect over-engineering, detect AI-slop, suggest updates
 - Navigation (repo → project → module → file) is the frame only
 - AI analysis is the real product and the differentiator
