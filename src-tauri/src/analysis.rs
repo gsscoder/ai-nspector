@@ -291,11 +291,11 @@ fn module_report(
     module_name: String,
     outcome: Result<String, AppError>,
 ) -> ModuleReport {
-    let (status, text, error) = match outcome {
-        Ok(answer) if NOTHING_FOUND.contains(&answer.trim()) => {
-            (ModuleStatus::NothingFound, answer, None)
+    let (status, text, error) = match outcome.as_deref().map(unfence) {
+        Ok(answer) if NOTHING_FOUND.contains(&answer) => {
+            (ModuleStatus::NothingFound, answer.to_string(), None)
         }
-        Ok(answer) => (ModuleStatus::Done, answer, None),
+        Ok(answer) => (ModuleStatus::Done, answer.to_string(), None),
         Err(error) => (ModuleStatus::Failed, String::new(), Some(error.to_string())),
     };
     ModuleReport {
@@ -726,6 +726,20 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&done).unwrap()["status"],
             "nothingFound"
+        );
+    }
+
+    #[test]
+    fn a_module_report_loses_one_fence_around_the_whole_answer() {
+        let report = |answer: &str| module_report("m".into(), "M".into(), Ok(answer.into()));
+        let inner = "1. Finding\n```rust\nlet x = 1;\n```";
+        let fenced = report(&format!("```markdown\n{inner}\n```\n"));
+        assert_eq!(fenced.status, ModuleStatus::Done);
+        assert_eq!(fenced.text, inner);
+        assert_eq!(report(inner).text, inner);
+        assert_eq!(
+            report("```\nNo defects found.\n```").status,
+            ModuleStatus::NothingFound
         );
     }
 

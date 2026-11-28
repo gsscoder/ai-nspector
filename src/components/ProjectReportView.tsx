@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import AgentPromptDialog from "@/components/AgentPromptDialog";
 import LlmHint from "@/components/LlmHint";
+import Markdown from "@/components/Markdown";
 import { createProjectAgentPrompt } from "@/api";
 import { useLlmBlocked } from "@/lib/llmConfigured";
 import { useGeneration } from "@/lib/useGeneration";
@@ -17,7 +18,7 @@ const STATUS_BADGE: Record<ModuleReport["status"], { label: string; className: s
 function ModuleBody({ module }: { module: ModuleReport }) {
   switch (module.status) {
     case "done":
-      return <p className="text-sm leading-relaxed whitespace-pre-wrap">{module.text}</p>;
+      return <Markdown text={module.text} className="text-sm leading-relaxed" />;
     case "nothingFound":
       return <p className="text-sm text-muted-foreground">No findings</p>;
     case "failed":

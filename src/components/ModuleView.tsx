@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import AnalysisPanel from "@/components/AnalysisPanel";
 import CodeView from "@/components/CodeView";
 import GenerationProgress from "@/components/GenerationProgress";
+import Markdown from "@/components/Markdown";
 import ProjectReportView from "@/components/ProjectReportView";
 import { listAnalyses, openInEditor, startProjectAnalysis } from "@/api";
 import { splitPath } from "@/lib/project";
@@ -131,7 +132,7 @@ export default function ModuleView({
                   kind="findings"
                 />
                 {generation.streamed !== "" && (
-                  <p className="max-h-40 overflow-y-auto text-xs whitespace-pre-wrap text-muted-foreground">{generation.streamed}</p>
+                  <Markdown text={generation.streamed} className="max-h-40 overflow-y-auto text-xs text-muted-foreground" />
                 )}
               </>
             )}

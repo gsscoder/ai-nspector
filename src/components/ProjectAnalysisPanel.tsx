@@ -3,6 +3,7 @@ import { PanelRightClose, PanelRightOpen, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import GenerationProgress from "@/components/GenerationProgress";
 import LlmHint from "@/components/LlmHint";
+import Markdown from "@/components/Markdown";
 import { onProjectAnalysisProgress, startProjectAnalysis } from "@/api";
 import { useGeneration } from "@/lib/useGeneration";
 import { useLlmBlocked } from "@/lib/llmConfigured";
@@ -142,7 +143,7 @@ export default function ProjectAnalysisPanel({
               kind="findings"
             />
             {generation.streamed !== "" && (
-              <p className="max-h-40 overflow-y-auto text-xs whitespace-pre-wrap text-muted-foreground">{generation.streamed}</p>
+              <Markdown text={generation.streamed} className="max-h-40 overflow-y-auto text-xs text-muted-foreground" />
             )}
           </>
         ) : (

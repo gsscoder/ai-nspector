@@ -133,6 +133,50 @@
     @apply w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none transition-[color,box-shadow] placeholder:text-muted-foreground/70 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 dark:bg-input/30;
 }
 
+/* LLM markdown in small panels; spacing only between siblings, so no outer margins. */
+@utility markdown {
+    & > * + *, & :where(li) > * + * {
+        @apply mt-2;
+    }
+    & > * + :where(h1, h2, h3, h4) {
+        @apply mt-4;
+    }
+    & :where(h1) {
+        @apply text-base font-semibold;
+    }
+    & :where(h2) {
+        @apply text-sm font-semibold;
+    }
+    & :where(h3, h4) {
+        @apply text-sm font-medium;
+    }
+    & :where(strong) {
+        @apply font-semibold;
+    }
+    & :where(ul) {
+        @apply list-disc pl-5 marker:text-muted-foreground;
+    }
+    & :where(ol) {
+        @apply list-decimal pl-5 marker:text-muted-foreground;
+    }
+    & :where(li + li) {
+        @apply mt-1;
+    }
+    & :where(code) {
+        @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em];
+    }
+    /* bg overrides the inline background of Shiki's pre */
+    & :where(pre) {
+        @apply overflow-x-auto rounded-md border bg-muted/50! p-3 font-mono text-xs outline-none;
+    }
+    & :where(pre) code {
+        @apply rounded-none bg-transparent p-0 text-[1em];
+    }
+    & :where(blockquote) {
+        @apply border-l-2 pl-3 text-muted-foreground;
+    }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
