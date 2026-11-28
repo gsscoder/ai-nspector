@@ -69,11 +69,12 @@ export default function ProjectAnalysisPanel({
   }
   return (
     <aside className="w-64 shrink-0">
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-4 flex h-8.5 items-end justify-between">
         <h3 className="text-xs font-medium tracking-wider text-muted-foreground uppercase">Project analysis</h3>
         <Button
           variant="ghost"
           size="icon-sm"
+          className="-mb-1.5"
           aria-label="Hide project analysis"
           disabled={running}
           onClick={() => setOpen(false)}
@@ -81,11 +82,11 @@ export default function ProjectAnalysisPanel({
           <PanelRightClose />
         </Button>
       </div>
-      {overviewMissing && (
-        <p className="mb-2 text-xs text-muted-foreground">Generate the repo overview first. The analysis needs it.</p>
-      )}
-      <LlmHint className="mb-2" />
       <div className="flex flex-col gap-2 rounded-xl border bg-card p-3">
+        {overviewMissing && (
+          <p className="text-xs text-muted-foreground">Generate the repo overview first. The analysis needs it.</p>
+        )}
+        <LlmHint />
         <select
           className="field h-8"
           aria-label="Analysis"
